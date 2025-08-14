@@ -19,11 +19,11 @@ phases:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
       - |
         sam deploy \
-          --stack-name multi-lambda-stack \        # <--- change if you like
+          --stack-name multi-lambda-stack \
           --no-confirm-changeset \
           --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
           --resolve-s3 \
-          --region us-east-1                     # <--- change region if needed
+          --region us-east-1
 
 artifacts:
   files:
