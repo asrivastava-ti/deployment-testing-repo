@@ -15,7 +15,8 @@ phases:
   post_build:
     commands:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
-      - sam deploy
+      - |
+        sam deploy
           --stack-name multi-lambda-stack         # <--- change if you like
           --no-confirm-changeset
           --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND
