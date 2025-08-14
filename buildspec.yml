@@ -15,7 +15,7 @@ phases:
   build:
     commands:
       # Build all functions from template.yaml
-      - sam build --parallel --use-container false
+      - sam build --parallel
   post_build:
     commands:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
