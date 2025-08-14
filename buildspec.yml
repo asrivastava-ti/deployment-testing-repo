@@ -12,9 +12,7 @@ phases:
   build:
     commands:
       # Build all functions from template.yaml
-      - sam build --parallel --use-container=false \
-          --build-dir .aws-sam/build \
-          --template template.yaml
+      - sam build --parallel --use-container=false
       # - sam build --
   post_build:
     commands:
