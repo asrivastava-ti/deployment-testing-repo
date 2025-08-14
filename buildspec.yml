@@ -23,7 +23,7 @@ phases:
       - echo "Packaging Lambda code to S3..."
       - sam package \
           --output-template-file packaged.yaml \
-          --s3-bucket $ARTIFACT_BUCKET \
+          --s3-bucket ayush-lambda-artifacts \
           --s3-prefix $DEPLOYMENT_KEY_PREFIX
 
       - echo "Deploying with debug logs..."
