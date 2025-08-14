@@ -25,6 +25,7 @@ phases:
           --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
           --resolve-s3 \
           --region us-east-1
+          --debug
 
 artifacts:
   files:
