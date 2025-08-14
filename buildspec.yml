@@ -20,12 +20,12 @@ phases:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
       - |
         sam deploy \
+          --template-file template.yaml \
           --stack-name multi-lambda-stack \
           --no-confirm-changeset \
           --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
           --resolve-s3 \
-          --region us-east-1 \
-          --debug
+          --region us-east-1
 
 artifacts:
   files:
