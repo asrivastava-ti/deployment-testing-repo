@@ -12,20 +12,29 @@ phases:
       - sam --version
   build:
     commands:
-      # Build all functions from template.yaml
-      - sam build --parallel
-      # - sam build --
-  post_build:
-    commands:
-      # Deploy code + configuration (env vars, memory, timeouts, triggers)
-      - |
-        sam deploy --no-fail-on-empty-changeset \
-          --template-file template.yaml \
-          --stack-name multi-lambda-stack \
+      - echo "Validating SAM template syntax..."
+      - sam validate --lint
+      - echo "Validating CloudFormation template syntax..."
+      - aws cloudformation validate-template --template-body file://template.yaml
+
+      - echo "Building Lambda source code..."
+      - sam build
+
+      - echo "Packaging Lambda code to S3..."
+      - sam package \
+          --output-template-file packaged.yaml \
+          --s3-bucket $ARTIFACT_BUCKET \
+          --s3-prefix $DEPLOYMENT_KEY_PREFIX
+
+      - echo "Deploying with debug logs..."
+      - sam deploy \
+          --template-file packaged.yaml \
+          --stack-name $STACK_NAME \
+          --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+          --region $AWS_REGION \
           --no-confirm-changeset \
-          --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-          --resolve-s3 \
-          --region us-east-1
+          --no-fail-on-empty-changeset \
+          --debug
 
 artifacts:
   files:
