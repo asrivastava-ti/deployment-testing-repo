@@ -1,23 +1,20 @@
 version: 0.2
 
-env:
-  variables:
-    PATH: "/root/.local/bin:$PATH"
-
 phases:
   install:
     runtime-versions:
-      python: 3.11
+      python: 3.12
     commands:
       # - apt-get update -y
       # - apt-get install -y docker.io
       - pip install --upgrade pip
-      - pip install aws-sam-cli --user
       - sam --version
   build:
     commands:
       # Build all functions from template.yaml
-      - sam build --parallel --use-container --build-image public.ecr.aws/lambda/python:3.12
+      - sam build --parallel --use-container=false \
+          --build-dir .aws-sam/build \
+          --template template.yaml
       # - sam build --
   post_build:
     commands:
