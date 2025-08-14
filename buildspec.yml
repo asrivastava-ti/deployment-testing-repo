@@ -18,8 +18,7 @@ phases:
   post_build:
     commands:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
-      - |
-        sam deploy --no-fail-on-empty-changeset \
+      - sam deploy --no-fail-on-empty-changeset \
           --template-file template.yaml \
           --stack-name multi-lambda-stack \
           --no-confirm-changeset \
