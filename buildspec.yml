@@ -1,12 +1,16 @@
 version: 0.2
 
+env:
+  variables:
+    PATH: "/root/.local/bin:$PATH"
+
 phases:
   install:
     runtime-versions:
       python: 3.12
     commands:
       - pip install --upgrade pip
-      - pip install aws-sam-cli
+      - pip install aws-sam-cli --user
       - sam --version
   build:
     commands:
@@ -16,11 +20,11 @@ phases:
     commands:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
       - |
-        sam deploy
-          --stack-name multi-lambda-stack         # <--- change if you like
-          --no-confirm-changeset
-          --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND
-          --resolve-s3
+        sam deploy \
+          --stack-name multi-lambda-stack \        # <--- change if you like
+          --no-confirm-changeset \
+          --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+          --resolve-s3 \
           --region us-east-1                     # <--- change region if needed
 
 artifacts:
