@@ -8,6 +8,7 @@ phases:
       # - apt-get update -y
       # - apt-get install -y docker.io
       - pip install --upgrade pip
+      - pip install aws-sam-cli --break-system-packages
       - sam --version
   build:
     commands:
