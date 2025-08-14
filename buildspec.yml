@@ -9,15 +9,15 @@ phases:
     runtime-versions:
       python: 3.12
     commands:
-      - apt-get update -y
-      - apt-get install -y docker.io
+      # - apt-get update -y
+      # - apt-get install -y docker.io
       - pip install --upgrade pip
       - pip install aws-sam-cli --user
       - sam --version
   build:
     commands:
       # Build all functions from template.yaml
-      - sam build --parallel --use-container \
+      - sam build --parallel --use-container=false
   post_build:
     commands:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
