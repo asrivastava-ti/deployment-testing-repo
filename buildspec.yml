@@ -15,7 +15,10 @@ phases:
   build:
     commands:
       # Build all functions from template.yaml
-      - sam build --parallel
+      - sam build --template template.yaml
+      - sam package \
+          --output-template-file packaged.yaml \
+          --s3-bucket $ARTIFACT_BUCKET \  # <--- change to your S3 bucket
   post_build:
     commands:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
