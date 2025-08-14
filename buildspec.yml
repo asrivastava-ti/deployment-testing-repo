@@ -17,7 +17,8 @@ phases:
   build:
     commands:
       # Build all functions from template.yaml
-      - sam build --parallel
+      - sam build --parallel --use-container --build-image public.ecr.aws/lambda/python:3.12
+      # - sam build --
   post_build:
     commands:
       # Deploy code + configuration (env vars, memory, timeouts, triggers)
