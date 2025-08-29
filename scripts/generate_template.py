@@ -1,4 +1,4 @@
-import os, json, yaml
+import os, json, yaml, re
 
 TEMPLATE_FILE = "template.yaml"
 FUNCTIONS_DIR = "src/functions"
@@ -9,6 +9,10 @@ base = {
     "Description": "Auto-generated multi-Lambda stack",
     "Resources": {}
 }
+
+def sanitize_logical_id(name):
+    parts = re.split(r'[^a-zA-Z0-9]', name)
+    return ''.join(word.capitalize() for word in parts if word)
 
 def detect_runtime_from_code(files):
     for f in files:
@@ -47,6 +51,7 @@ def main():
         env = {"Variables": cfg.get("env", {"STAGE": "dev"})}
 
         props = {
+            "FunctionName": fn_name,
             "CodeUri": fn_dir,
             "Handler": handler,
             "Runtime": runtime,
@@ -54,6 +59,8 @@ def main():
             "Timeout": timeout,
             "Environment": env
         }
+
+        logical_id = sanitize_logical_id(fn_name)
 
         # Use explicit role if provided; else allow SAM to create one
         role = cfg.get("role", "").strip()
@@ -64,7 +71,7 @@ def main():
             policies = cfg.get("policies", ["AWSLambdaBasicExecutionRole"])
             props["Policies"] = policies
 
-        resources[fn_name] = {"Type": "AWS::Serverless::Function", "Properties": props}
+        resources[logical_id] = {"Type": "AWS::Serverless::Function", "Properties": props}
 
     tpl["Resources"] = resources
 
