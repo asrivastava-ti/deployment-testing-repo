@@ -10,6 +10,21 @@ base = {
     "Resources": {}
 }
 
+def create_samignore_if_needed(fn_dir):
+    """Create .samignore file if it doesn't exist to exclude config.json"""
+    samignore_path = os.path.join(fn_dir, ".samignore")
+    
+    if not os.path.exists(samignore_path):
+        samignore_content = "config.json"
+        
+        with open(samignore_path, "w") as f:
+            f.write(samignore_content)
+        
+        print(f"Created .samignore in {fn_dir}")
+    else:
+        print(f".samignore already exists in {fn_dir}")
+
+
 def sanitize_logical_id(name):
     parts = re.split(r'[^a-zA-Z0-9]', name)
     return ''.join(word.capitalize() for word in parts if word)
@@ -44,6 +59,8 @@ def main():
 
         cfg = load_cfg(os.path.join(fn_dir, "config.json"))
 
+        create_samignore_if_needed(fn_dir)
+
         handler = cfg.get("handler", default_handler)
         runtime = cfg.get("runtime", runtime)
         memory = int(cfg.get("memory", 128))
@@ -53,7 +70,6 @@ def main():
         props = {
             "FunctionName": fn_name,
             "CodeUri": fn_dir,
-            "Exclude": ["config.json"],
             "Handler": handler,
             "Runtime": runtime,
             "MemorySize": memory,
