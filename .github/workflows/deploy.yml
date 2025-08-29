@@ -1,0 +1,68 @@
+name: Deploy SAM Multi-Lambda
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/functions/**"
+      - "scripts/generate_template.py"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  id-token: write   # for OIDC
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ARTIFACT_BUCKET: ayush-lambda-artifacts
+  STACK_NAME: my-multi-lambda-stack-actions
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production   # set required reviewers on this environment for approvals
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::975049970782:role/GithubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install tooling
+        run: |
+          pip install --upgrade pip
+          pip install aws-sam-cli pyyaml cfn-lint
+
+      - name: Generate template.yaml
+        run: python scripts/generate_template.py
+
+      - name: Validate (SAM + cfn-lint)
+        run: |
+          sam validate --template template.yaml
+          cfn-lint template.yaml
+
+      - name: Build (use Lambda-like container for deps)
+        run: sam build --use-container
+
+      - name: Package
+        run: sam package \
+               --template-file template.yaml \
+               --s3-bucket ${{ env.ARTIFACT_BUCKET }} \
+               --output-template-file packaged.yaml
+
+      - name: Deploy
+        run: sam deploy \
+               --template-file packaged.yaml \
+               --stack-name ${{ env.STACK_NAME }} \
+               --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+               --no-fail-on-empty-changeset
