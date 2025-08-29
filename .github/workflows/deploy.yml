@@ -60,7 +60,8 @@ jobs:
         run: sam build --use-container
 
       - name: Package
-        run: sam package \
+        run: |
+          sam package \
                --template-file .aws-sam/build/template.yaml \
                --s3-bucket ayush-lambda-artifacts \
                --output-template-file packaged.yaml
