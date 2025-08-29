@@ -63,11 +63,12 @@ jobs:
         run: |
           sam package \
                --template-file .aws-sam/build/template.yaml \
-               --s3-bucket ayush-lambda-artifacts \
+               --s3-bucket ${{ env.ARTIFACT_BUCKET }} \
                --output-template-file packaged.yaml
 
       - name: Deploy
-        run: sam deploy \
+        run: |
+          sam deploy \
                --template-file packaged.yaml \
                --stack-name ${{ env.STACK_NAME }} \
                --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
