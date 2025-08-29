@@ -53,6 +53,7 @@ def main():
         props = {
             "FunctionName": fn_name,
             "CodeUri": fn_dir,
+            "Exclude": ["config.json"],
             "Handler": handler,
             "Runtime": runtime,
             "MemorySize": memory,
