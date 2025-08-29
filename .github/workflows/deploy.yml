@@ -61,8 +61,8 @@ jobs:
 
       - name: Package
         run: sam package \
-               --template-file template.yaml \
-               --s3-bucket "ayush-lambda-artifacts" \
+               --template-file .aws-sam/build/template.yaml \
+               --s3-bucket ayush-lambda-artifacts \
                --output-template-file packaged.yaml
 
       - name: Deploy
