@@ -29,7 +29,8 @@ jobs:
 
       - name: Print OIDC token claims
         run: |
-          echo "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | base64 --decode   
+          echo "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | cut -d '.' -f1 | base64 -d -i 2>/dev/null || true
+          echo "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | cut -d '.' -f2 | base64 -d -i 2>/dev/null || true 
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
