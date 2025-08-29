@@ -27,10 +27,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Print OIDC token claims
+        run: |
+          echo "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | base64 --decode   
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::975049970782:role/dev-github-actions-role
+          role-to-assume: arn:aws:iam::975049970782:role/GithubActionsRole
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Python
