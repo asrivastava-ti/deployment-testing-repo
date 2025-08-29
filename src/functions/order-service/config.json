@@ -1,0 +1,12 @@
+{
+  "handler": "app.lambda_handler",
+  "runtime": "python3.13",
+  "memory": 512,
+  "timeout": 20,
+  "env": {
+    "STAGE": "dev",
+    "DB_TABLE": "users"
+  },
+  "policies": ["AWSLambdaBasicExecutionRole"], 
+  "role": ""
+}
