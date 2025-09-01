@@ -57,7 +57,7 @@ jobs:
           cfn-lint template.yaml
 
       - name: Build (use Lambda-like container for deps)
-        run: sam build --use-container
+        run: sam build
 
       - name: Package
         run: |
