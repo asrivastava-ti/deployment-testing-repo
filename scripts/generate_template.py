@@ -79,7 +79,10 @@ def main():
             "Timeout": timeout,
             "Environment": env
         }
-
+        layers = cfg.get("layers", [])
+        if layers:
+            props["Layers"] = layers
+        
         logical_id = sanitize_logical_id(fn_name)
 
         # Use explicit role if provided; else allow SAM to create one
