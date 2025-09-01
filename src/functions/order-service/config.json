@@ -8,5 +8,5 @@
     "DB_TABLE": "users"
   },
   "policies": ["AWSLambdaBasicExecutionRole","AmazonS3FullAccess"], 
-  "role": "lambda-dynamodb-full-access"
+  "role": "arn:aws:iam::975049970782:role/lambda-dynamodb-full-access"
 }
