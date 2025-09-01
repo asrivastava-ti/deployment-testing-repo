@@ -1,4 +1,4 @@
-import os, json, yaml, re
+import os, json, yaml, re, shutil
 
 TEMPLATE_FILE = "template.yaml"
 FUNCTIONS_DIR = "src/functions"
@@ -10,20 +10,23 @@ base = {
     "Resources": {}
 }
 
-def create_samignore_if_needed(fn_dir):
-    """Create .samignore file if it doesn't exist to exclude config.json"""
-    samignore_path = os.path.join(fn_dir, ".samignore")
+def create_clean_build_dir(fn_dir, fn_name):
+    """Create a clean build directory with only code files"""
+    build_dir = f"build/{fn_name}"
     
-    if not os.path.exists(samignore_path):
-        samignore_content = "config.json"
-        
-        with open(samignore_path, "w") as f:
-            f.write(samignore_content)
-        
-        print(f"Created .samignore in {fn_dir}")
-    else:
-        print(f".samignore already exists in {fn_dir}")
-
+    # Remove existing build dir if it exists
+    if os.path.exists(build_dir):
+        shutil.rmtree(build_dir)
+    
+    # Create new build directory
+    os.makedirs(build_dir, exist_ok=True)
+    
+    # Copy only .py files (exclude config.json)
+    for file in os.listdir(fn_dir):
+        if file.endswith('.py'):
+            shutil.copy2(os.path.join(fn_dir, file), build_dir)
+    
+    return build_dir
 
 def sanitize_logical_id(name):
     parts = re.split(r'[^a-zA-Z0-9]', name)
@@ -51,8 +54,6 @@ def main():
         fn_dir = os.path.join(FUNCTIONS_DIR, fn_name)
         if not os.path.isdir(fn_dir): continue
 
-        create_samignore_if_needed(fn_dir)
-
         files = os.listdir(fn_dir)
         runtime, code_file, default_handler = detect_runtime_from_code(files)
         if not code_file: 
@@ -61,7 +62,7 @@ def main():
 
         cfg = load_cfg(os.path.join(fn_dir, "config.json"))
 
-        
+        clean_dir = create_clean_build_dir(fn_dir, fn_name)
 
         handler = cfg.get("handler", default_handler)
         runtime = cfg.get("runtime", runtime)
@@ -71,7 +72,7 @@ def main():
 
         props = {
             "FunctionName": fn_name,
-            "CodeUri": fn_dir,
+            "CodeUri": clean_dir,
             "Handler": handler,
             "Runtime": runtime,
             "MemorySize": memory,
