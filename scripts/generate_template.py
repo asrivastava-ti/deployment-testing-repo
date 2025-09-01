@@ -51,6 +51,8 @@ def main():
         fn_dir = os.path.join(FUNCTIONS_DIR, fn_name)
         if not os.path.isdir(fn_dir): continue
 
+        create_samignore_if_needed(fn_dir)
+
         files = os.listdir(fn_dir)
         runtime, code_file, default_handler = detect_runtime_from_code(files)
         if not code_file: 
@@ -59,7 +61,7 @@ def main():
 
         cfg = load_cfg(os.path.join(fn_dir, "config.json"))
 
-        create_samignore_if_needed(fn_dir)
+        
 
         handler = cfg.get("handler", default_handler)
         runtime = cfg.get("runtime", runtime)
