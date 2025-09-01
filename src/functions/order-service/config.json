@@ -3,6 +3,7 @@
   "runtime": "python3.13",
   "memory": 512,
   "timeout": 20,
+  "layers": [],
   "env": {
     "STAGE": "dev",
     "DB_TABLE": "users"
