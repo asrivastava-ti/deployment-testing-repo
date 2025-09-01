@@ -1,0 +1,9 @@
+{
+  "handler": "app.lambda_handler",
+  "runtime": "python3.13",
+  "memory": 512,
+  "timeout": 20,
+  "env": {},
+  "policies": ["AWSLambdaBasicExecutionRole","AmazonS3FullAccess"], 
+  "role": ""
+}

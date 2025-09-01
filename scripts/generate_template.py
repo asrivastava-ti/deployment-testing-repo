@@ -65,7 +65,7 @@ def main():
         runtime = cfg.get("runtime", runtime)
         memory = int(cfg.get("memory", 128))
         timeout = int(cfg.get("timeout", 10))
-        env = {"Variables": cfg.get("env", {"STAGE": "dev"})}
+        env = {"Variables": cfg.get("env", {})}
 
         props = {
             "FunctionName": fn_name,
