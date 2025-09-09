@@ -8,6 +8,6 @@
     "STAGE": "dev",
     "DB_TABLE": "users"
   },
-  "policies": ["AWSLambdaBasicExecutionRole","AmazonS3FullAccess"], 
+  "policies": ["AWSLambdaBasicExecutionRole","AmazonS3FullAccess"],
   "role": ""
 }

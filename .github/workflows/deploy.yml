@@ -1,75 +1,82 @@
-name: Deploy SAM Multi-Lambda
+name: Deploy SAM Application with Drift Detection
 
 on:
   push:
-    branches: [ "main" ]
-    paths:
-      - "src/functions/**"
-      - "scripts/generate_template.py"
-      - ".github/workflows/deploy.yml"
-
-permissions:
-  id-token: write   # for OIDC
-  contents: read
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
-  ARTIFACT_BUCKET: ayush-lambda-artifacts
-  STACK_NAME: my-multi-lambda-stack-actions
 
 jobs:
-  deploy:
+  validate-and-deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: production   # set required reviewers on this environment for approvals
-
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Print OIDC token claims
-        run: |
-          echo "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | cut -d '.' -f1 | base64 -d -i 2>/dev/null || true
-          echo "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | cut -d '.' -f2 | base64 -d -i 2>/dev/null || true 
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::975049970782:role/GithubActionsRole
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tooling
-        run: |
-          pip install --upgrade pip
-          pip install aws-sam-cli pyyaml cfn-lint
-
-      - name: Generate template.yaml
-        run: python scripts/generate_template.py
-
-      - name: Validate (SAM + cfn-lint)
-        run: |
-          sam validate --template template.yaml
-          cfn-lint template.yaml
-
-      - name: Build (use Lambda-like container for deps)
-        run: sam build --use-container
-
-      - name: Package
-        run: |
-          sam package \
-               --template-file .aws-sam/build/template.yaml \
-               --s3-bucket ${{ env.ARTIFACT_BUCKET }} \
-               --output-template-file packaged.yaml
-
-      - name: Deploy
-        run: |
-          sam deploy \
-               --template-file packaged.yaml \
-               --stack-name ${{ env.STACK_NAME }} \
-               --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-               --no-fail-on-empty-changeset
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install boto3 pyyaml
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Set up SAM CLI
+      uses: aws-actions/setup-sam@v2
+      with:
+        use-installer: true
+    
+    - name: Generate SAM Template
+      run: |
+        cd deployment-testing-repo
+        python scripts/generate_template.py
+    
+    - name: Validate AWS Drift (Fail on Differences)
+      run: |
+        cd deployment-testing-repo
+        python scripts/validate_aws_diff.py --ci-mode --region ${{ env.AWS_REGION }}
+      env:
+        AWS_REGION: ${{ env.AWS_REGION }}
+    
+    - name: SAM Build
+      run: |
+        cd deployment-testing-repo
+        sam build
+    
+    - name: SAM Deploy
+      run: |
+        cd deployment-testing-repo
+        sam deploy --no-confirm-changeset --no-fail-on-empty-changeset --stack-name deployment-testing-stack --region ${{ env.AWS_REGION }} --capabilities CAPABILITY_IAM
+      env:
+        AWS_REGION: ${{ env.AWS_REGION }}
+    
+    - name: Deployment Success
+      if: success()
+      run: |
+        echo "🚀 Deployment completed successfully!"
+        echo "✅ All AWS resources are in sync with template"
+    
+    - name: Deployment Failed
+      if: failure()
+      run: |
+        echo "❌ Deployment failed!"
+        echo "This could be due to:"
+        echo "  • AWS console drift detected"
+        echo "  • SAM deployment errors"
+        echo "  • AWS credential issues"
+        echo ""
+        echo "Check the logs above for specific error details."
