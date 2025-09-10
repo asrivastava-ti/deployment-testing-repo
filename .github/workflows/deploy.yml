@@ -134,60 +134,58 @@ jobs:
                 echo "  Current AWS SHA256: $CURRENT_SHA"
                 
                 # Build the function locally to get expected SHA256
-                # Note: We'll build after this check, so we need to build temporarily here
                 echo "  Building function locally to compare..."
-                sam build --use-container
+                sam build --use-container >/dev/null 2>&1
                 
-                # Get the built function's SHA256 (this is tricky - we need to zip and hash)
-                # For now, we'll use a simpler approach: check if deployment would create changes
-                echo "  Checking if deployment would make changes..."
+                # Get the expected SHA256 by creating a temporary deployment package
+                echo "  Calculating expected SHA256 from local code..."
                 
-                # Create a changeset to see what would change
-                CHANGESET_NAME="drift-check-$(date +%s)"
-                echo "  Creating changeset: $CHANGESET_NAME"
-                
-                # Package first to ensure we have the right artifacts
-                sam package \
-                  --template-file .aws-sam/build/template.yaml \
-                  --s3-bucket ${{ env.ARTIFACT_BUCKET }} \
-                  --output-template-file .aws-sam/drift-check-packaged.yaml >/dev/null 2>&1
-                
-                # Create changeset with better error handling using AWS CLI directly
-                if aws cloudformation create-change-set \
-                  --template-body file://.aws-sam/drift-check-packaged.yaml \
+                # Find the function's logical ID from the template
+                LOGICAL_ID=$(aws cloudformation describe-stack-resources \
                   --stack-name ${{ env.STACK_NAME }} \
-                  --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-                  --change-set-name $CHANGESET_NAME 2>&1; then
+                  --physical-resource-id $FUNCTION_NAME \
+                  --query 'StackResources[0].LogicalResourceId' --output text)
+                
+                echo "  Function logical ID: $LOGICAL_ID"
+                
+                # Create a temporary zip of the built function
+                TEMP_ZIP="/tmp/${FUNCTION_NAME}-temp.zip"
+                
+                # Find the built function directory
+                BUILT_FUNCTION_DIR=".aws-sam/build/$LOGICAL_ID"
+                
+                if [ -d "$BUILT_FUNCTION_DIR" ]; then
+                  echo "  Creating temporary zip from: $BUILT_FUNCTION_DIR"
                   
-                  echo "  Changeset created successfully"
+                  # Create zip file
+                  cd "$BUILT_FUNCTION_DIR"
+                  zip -r "$TEMP_ZIP" . >/dev/null 2>&1
+                  cd - >/dev/null
                   
-                  # Check if changeset has any Lambda function changes
-                  LAMBDA_CHANGES=$(aws cloudformation describe-change-set \
-                    --stack-name ${{ env.STACK_NAME }} \
-                    --change-set-name $CHANGESET_NAME \
-                    --query 'Changes[?ResourceChange.ResourceType==`AWS::Lambda::Function`]' \
-                    --output text 2>/dev/null || echo "")
+                  # Calculate SHA256 of the zip file (base64 encoded like AWS does)
+                  EXPECTED_SHA=$(openssl dgst -sha256 -binary "$TEMP_ZIP" | openssl base64)
                   
-                  # Clean up the changeset
-                  aws cloudformation delete-change-set \
-                    --stack-name ${{ env.STACK_NAME }} \
-                    --change-set-name $CHANGESET_NAME >/dev/null 2>&1 || true
+                  echo "  Expected SHA256: $EXPECTED_SHA"
+                  echo "  Current AWS SHA256: $CURRENT_SHA"
                   
-                  if [ -n "$LAMBDA_CHANGES" ] && [ "$LAMBDA_CHANGES" != "None" ]; then
+                  # Compare the SHA256 hashes
+                  if [ "$CURRENT_SHA" != "$EXPECTED_SHA" ]; then
                     echo "  ❌ Lambda function $FUNCTION_NAME has code drift!"
-                    echo "  📋 This means the function code in AWS differs from your source code"
+                    echo "  📋 SHA256 mismatch indicates manual code changes in AWS console"
+                    echo "  📋 Expected: $EXPECTED_SHA"
+                    echo "  📋 Current:  $CURRENT_SHA"
                     LAMBDA_DRIFT_DETECTED=true
                   else
                     echo "  ✅ Lambda function $FUNCTION_NAME code matches source"
                   fi
+                  
+                  # Clean up temporary zip
+                  rm -f "$TEMP_ZIP"
                 else
-                  echo "  ⚠️  Could not create changeset for comparison"
-                  echo "  ℹ️  Assuming no drift (changeset creation can fail for various reasons)"
+                  echo "  ⚠️  Could not find built function directory: $BUILT_FUNCTION_DIR"
+                  echo "  ℹ️  Assuming no drift (build directory not found)"
                   echo "  ✅ Lambda function $FUNCTION_NAME assumed to match source"
                 fi
-                
-                # Clean up temporary packaged template
-                rm -f .aws-sam/drift-check-packaged.yaml
               done
               
               if [ "$LAMBDA_DRIFT_DETECTED" = true ]; then
