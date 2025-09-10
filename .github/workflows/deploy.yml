@@ -69,9 +69,24 @@ jobs:
             
             echo "Drift detection started with ID: $DRIFT_ID"
             
-            # Wait for completion
-            aws cloudformation wait stack-drift-detection-complete \
-              --stack-drift-detection-id $DRIFT_ID
+            # Poll for drift detection completion
+            echo "⏳ Waiting for drift detection to complete..."
+            while true; do
+              STATUS=$(aws cloudformation describe-stack-drift-detection-status \
+                --stack-drift-detection-id $DRIFT_ID \
+                --query 'DetectionStatus' --output text)
+              
+              if [ "$STATUS" = "DETECTION_COMPLETE" ]; then
+                echo "✅ Drift detection completed"
+                break
+              elif [ "$STATUS" = "DETECTION_FAILED" ]; then
+                echo "❌ Drift detection failed"
+                exit 1
+              else
+                echo "⏳ Drift detection in progress (status: $STATUS)..."
+                sleep 5
+              fi
+            done
             
             # Get drift status
             DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
@@ -157,9 +172,24 @@ jobs:
           
           echo "Drift detection started with ID: $DRIFT_ID"
           
-          # Wait for completion
-          aws cloudformation wait stack-drift-detection-complete \
-            --stack-drift-detection-id $DRIFT_ID
+          # Poll for drift detection completion
+          echo "⏳ Waiting for drift detection to complete..."
+          while true; do
+            STATUS=$(aws cloudformation describe-stack-drift-detection-status \
+              --stack-drift-detection-id $DRIFT_ID \
+              --query 'DetectionStatus' --output text)
+            
+            if [ "$STATUS" = "DETECTION_COMPLETE" ]; then
+              echo "✅ Drift detection completed"
+              break
+            elif [ "$STATUS" = "DETECTION_FAILED" ]; then
+              echo "❌ Drift detection failed"
+              exit 1
+            else
+              echo "⏳ Drift detection in progress (status: $STATUS)..."
+              sleep 5
+            fi
+          done
           
           # Get drift status
           DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
