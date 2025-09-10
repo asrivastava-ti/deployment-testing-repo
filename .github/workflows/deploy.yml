@@ -152,14 +152,12 @@ jobs:
                   --s3-bucket ${{ env.ARTIFACT_BUCKET }} \
                   --output-template-file .aws-sam/drift-check-packaged.yaml >/dev/null 2>&1
                 
-                # Create changeset with better error handling
-                if sam deploy \
-                  --template-file .aws-sam/drift-check-packaged.yaml \
+                # Create changeset with better error handling using AWS CLI directly
+                if aws cloudformation create-change-set \
+                  --template-body file://.aws-sam/drift-check-packaged.yaml \
                   --stack-name ${{ env.STACK_NAME }} \
                   --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-                  --no-execute-changeset \
-                  --changeset-name $CHANGESET_NAME \
-                  --s3-bucket ${{ env.ARTIFACT_BUCKET }} 2>&1; then
+                  --change-set-name $CHANGESET_NAME 2>&1; then
                   
                   echo "  Changeset created successfully"
                   
