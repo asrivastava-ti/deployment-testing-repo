@@ -59,6 +59,28 @@ jobs:
       - name: Build (use Lambda-like container for deps)
         run: sam build --use-container
 
+      - name: Detect CloudFormation Drift
+        run: |
+          # Start drift detection
+          DRIFT_ID=$(aws cloudformation detect-stack-drift \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'StackDriftDetectionId' --output text)
+
+          # Wait for completion and check results
+          aws cloudformation wait stack-drift-detection-complete \
+            --stack-drift-detection-id $DRIFT_ID
+
+          # Get drift status
+          DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
+            --stack-drift-detection-id $DRIFT_ID \
+            --query 'StackDriftStatus' --output text)
+
+          if [ "$DRIFT_STATUS" = "DRIFTED" ]; then
+            echo "❌ Stack has drifted! Manual changes detected."
+            exit 1
+          fi
+ 
+
       - name: Package
         run: |
           sam package \
