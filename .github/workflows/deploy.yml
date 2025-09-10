@@ -126,20 +126,6 @@ jobs:
               for FUNCTION_NAME in $LAMBDA_FUNCTIONS; do
                 echo "📋 Checking function: $FUNCTION_NAME"
                 
-                # Get current function code SHA256 from AWS
-                CURRENT_SHA=$(aws lambda get-function \
-                  --function-name $FUNCTION_NAME \
-                  --query 'Configuration.CodeSha256' --output text)
-                
-                echo "  Current AWS SHA256: $CURRENT_SHA"
-                
-                # Build the function locally to get expected SHA256
-                echo "  Building function locally to compare..."
-                sam build --use-container >/dev/null 2>&1
-                
-                # Get the expected SHA256 by creating a temporary deployment package
-                echo "  Calculating expected SHA256 from local code..."
-                
                 # Find the function's logical ID from the template
                 LOGICAL_ID=$(aws cloudformation describe-stack-resources \
                   --stack-name ${{ env.STACK_NAME }} \
@@ -147,43 +133,100 @@ jobs:
                 
                 echo "  Function logical ID: $LOGICAL_ID"
                 
-                # Create a temporary zip of the built function
-                TEMP_ZIP="/tmp/${FUNCTION_NAME}-temp.zip"
+                # Download current function code from AWS
+                echo "  Downloading current function code from AWS..."
+                TEMP_DIR="/tmp/${FUNCTION_NAME}-aws-code"
+                mkdir -p "$TEMP_DIR"
                 
-                # Find the built function directory
-                BUILT_FUNCTION_DIR=".aws-sam/build/$LOGICAL_ID"
+                # Get the function code URL and download it
+                DOWNLOAD_URL=$(aws lambda get-function \
+                  --function-name $FUNCTION_NAME \
+                  --query 'Code.Location' --output text)
                 
-                if [ -d "$BUILT_FUNCTION_DIR" ]; then
-                  echo "  Creating temporary zip from: $BUILT_FUNCTION_DIR"
-                  
-                  # Create zip file
-                  cd "$BUILT_FUNCTION_DIR"
-                  zip -r "$TEMP_ZIP" . >/dev/null 2>&1
+                if [ "$DOWNLOAD_URL" != "None" ] && [ -n "$DOWNLOAD_URL" ]; then
+                  # Download and extract the current code
+                  curl -s "$DOWNLOAD_URL" -o "$TEMP_DIR/current-code.zip"
+                  cd "$TEMP_DIR"
+                  unzip -q current-code.zip
+                  rm current-code.zip
                   cd - >/dev/null
                   
-                  # Calculate SHA256 of the zip file (base64 encoded like AWS does)
-                  EXPECTED_SHA=$(openssl dgst -sha256 -binary "$TEMP_ZIP" | openssl base64)
-                  
-                  echo "  Expected SHA256: $EXPECTED_SHA"
-                  echo "  Current AWS SHA256: $CURRENT_SHA"
-                  
-                  # Compare the SHA256 hashes
-                  if [ "$CURRENT_SHA" != "$EXPECTED_SHA" ]; then
-                    echo "  ❌ Lambda function $FUNCTION_NAME has code drift!"
-                    echo "  📋 SHA256 mismatch indicates manual code changes in AWS console"
-                    echo "  📋 Expected: $EXPECTED_SHA"
-                    echo "  📋 Current:  $CURRENT_SHA"
-                    LAMBDA_DRIFT_DETECTED=true
+                  # Find the source function directory
+                  SOURCE_FUNCTION_DIR=""
+                  if [ -d "src/functions/testFunction" ] && [[ "$LOGICAL_ID" == *"testFunction"* || "$LOGICAL_ID" == *"TestFunction"* ]]; then
+                    SOURCE_FUNCTION_DIR="src/functions/testFunction"
+                  elif [ -d "src/functions/order-service" ] && [[ "$LOGICAL_ID" == *"order"* || "$LOGICAL_ID" == *"Order"* ]]; then
+                    SOURCE_FUNCTION_DIR="src/functions/order-service"
+                  elif [ -d "src/functions/user-service" ] && [[ "$LOGICAL_ID" == *"user"* || "$LOGICAL_ID" == *"User"* ]]; then
+                    SOURCE_FUNCTION_DIR="src/functions/user-service"
                   else
-                    echo "  ✅ Lambda function $FUNCTION_NAME code matches source"
+                    # Try to find by exact logical ID match
+                    for func_dir in src/functions/*/; do
+                      if [ -d "$func_dir" ]; then
+                        func_name=$(basename "$func_dir")
+                        if [[ "$LOGICAL_ID" == *"$func_name"* ]]; then
+                          SOURCE_FUNCTION_DIR="$func_dir"
+                          break
+                        fi
+                      fi
+                    done
                   fi
                   
-                  # Clean up temporary zip
-                  rm -f "$TEMP_ZIP"
+                  if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
+                    echo "  Comparing with source directory: $SOURCE_FUNCTION_DIR"
+                    
+                    # Compare the main Lambda function file
+                    MAIN_FILE=""
+                    if [ -f "$SOURCE_FUNCTION_DIR/lambda_function.py" ]; then
+                      MAIN_FILE="lambda_function.py"
+                    elif [ -f "$SOURCE_FUNCTION_DIR/app.py" ]; then
+                      MAIN_FILE="app.py"
+                    elif [ -f "$SOURCE_FUNCTION_DIR/index.js" ]; then
+                      MAIN_FILE="index.js"
+                    fi
+                    
+                    if [ -n "$MAIN_FILE" ]; then
+                      echo "  Comparing main file: $MAIN_FILE"
+                      
+                      # Calculate checksums of the main files
+                      SOURCE_CHECKSUM=$(sha256sum "$SOURCE_FUNCTION_DIR/$MAIN_FILE" | cut -d' ' -f1)
+                      AWS_CHECKSUM=$(sha256sum "$TEMP_DIR/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
+                      
+                      echo "  Source checksum: $SOURCE_CHECKSUM"
+                      echo "  AWS checksum: $AWS_CHECKSUM"
+                      
+                      if [ "$SOURCE_CHECKSUM" != "$AWS_CHECKSUM" ]; then
+                        echo "  ❌ Lambda function $FUNCTION_NAME has code drift!"
+                        echo "  📋 Main file ($MAIN_FILE) differs between source and AWS"
+                        echo "  🔧 Someone manually modified the function code in AWS console"
+                        
+                        # Show the differences if possible
+                        if [ "$AWS_CHECKSUM" != "missing" ]; then
+                          echo "  📋 Code differences detected:"
+                          diff -u "$SOURCE_FUNCTION_DIR/$MAIN_FILE" "$TEMP_DIR/$MAIN_FILE" || true
+                        else
+                          echo "  📋 Main file missing in AWS deployment"
+                        fi
+                        
+                        LAMBDA_DRIFT_DETECTED=true
+                      else
+                        echo "  ✅ Lambda function $FUNCTION_NAME code matches source"
+                      fi
+                    else
+                      echo "  ⚠️  Could not find main Lambda file in source directory"
+                      echo "  ℹ️  Skipping drift check for this function"
+                    fi
+                  else
+                    echo "  ⚠️  Could not map function to source directory"
+                    echo "  ℹ️  Available directories: $(ls -d src/functions/*/ 2>/dev/null | tr '\n' ' ')"
+                    echo "  ℹ️  Skipping drift check for this function"
+                  fi
+                  
+                  # Clean up temporary directory
+                  rm -rf "$TEMP_DIR"
                 else
-                  echo "  ⚠️  Could not find built function directory: $BUILT_FUNCTION_DIR"
-                  echo "  ℹ️  Assuming no drift (build directory not found)"
-                  echo "  ✅ Lambda function $FUNCTION_NAME assumed to match source"
+                  echo "  ⚠️  Could not get download URL for function code"
+                  echo "  ℹ️  Skipping drift check for this function"
                 fi
               done
               
