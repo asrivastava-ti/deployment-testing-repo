@@ -153,18 +153,22 @@ jobs:
                   
                   # Find the source function directory
                   SOURCE_FUNCTION_DIR=""
-                  if [ -d "src/functions/testFunction" ] && [[ "$LOGICAL_ID" == *"testFunction"* || "$LOGICAL_ID" == *"TestFunction"* ]]; then
+                  # Convert logical ID to lowercase for case-insensitive matching
+                  LOGICAL_ID_LOWER=$(echo "$LOGICAL_ID" | tr '[:upper:]' '[:lower:]')
+                  
+                  if [ -d "src/functions/testFunction" ] && [[ "$LOGICAL_ID_LOWER" == *"testfunction"* ]]; then
                     SOURCE_FUNCTION_DIR="src/functions/testFunction"
-                  elif [ -d "src/functions/order-service" ] && [[ "$LOGICAL_ID" == *"order"* || "$LOGICAL_ID" == *"Order"* ]]; then
+                  elif [ -d "src/functions/order-service" ] && [[ "$LOGICAL_ID_LOWER" == *"order"* ]]; then
                     SOURCE_FUNCTION_DIR="src/functions/order-service"
-                  elif [ -d "src/functions/user-service" ] && [[ "$LOGICAL_ID" == *"user"* || "$LOGICAL_ID" == *"User"* ]]; then
+                  elif [ -d "src/functions/user-service" ] && [[ "$LOGICAL_ID_LOWER" == *"user"* ]]; then
                     SOURCE_FUNCTION_DIR="src/functions/user-service"
                   else
-                    # Try to find by exact logical ID match
+                    # Try to find by case-insensitive directory name matching
                     for func_dir in src/functions/*/; do
                       if [ -d "$func_dir" ]; then
                         func_name=$(basename "$func_dir")
-                        if [[ "$LOGICAL_ID" == *"$func_name"* ]]; then
+                        func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
+                        if [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]]; then
                           SOURCE_FUNCTION_DIR="$func_dir"
                           break
                         fi
