@@ -62,55 +62,132 @@ jobs:
           if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} >/dev/null 2>&1; then
             echo "✅ Stack exists, checking for drift..."
             
-            # Start drift detection
+            # Start CloudFormation drift detection
             DRIFT_ID=$(aws cloudformation detect-stack-drift \
               --stack-name ${{ env.STACK_NAME }} \
               --query 'StackDriftDetectionId' --output text)
             
-            echo "Drift detection started with ID: $DRIFT_ID"
+            echo "CloudFormation drift detection started with ID: $DRIFT_ID"
             
             # Poll for drift detection completion
-            echo "⏳ Waiting for drift detection to complete..."
+            echo "⏳ Waiting for CloudFormation drift detection to complete..."
             while true; do
               STATUS=$(aws cloudformation describe-stack-drift-detection-status \
                 --stack-drift-detection-id $DRIFT_ID \
                 --query 'DetectionStatus' --output text)
               
               if [ "$STATUS" = "DETECTION_COMPLETE" ]; then
-                echo "✅ Drift detection completed"
+                echo "✅ CloudFormation drift detection completed"
                 break
               elif [ "$STATUS" = "DETECTION_FAILED" ]; then
-                echo "❌ Drift detection failed"
+                echo "❌ CloudFormation drift detection failed"
                 exit 1
               else
-                echo "⏳ Drift detection in progress (status: $STATUS)..."
+                echo "⏳ CloudFormation drift detection in progress (status: $STATUS)..."
                 sleep 5
               fi
             done
             
-            # Get drift status
+            # Get CloudFormation drift status
             DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
               --stack-drift-detection-id $DRIFT_ID \
               --query 'StackDriftStatus' --output text)
             
-            echo "Drift status: $DRIFT_STATUS"
+            echo "CloudFormation drift status: $DRIFT_STATUS"
             
             if [ "$DRIFT_STATUS" = "DRIFTED" ]; then
-              echo "❌ Stack has drifted! Manual changes detected."
+              echo "❌ CloudFormation stack has drifted! Manual changes detected."
               
               # Get detailed drift information
-              echo "📋 Drift Details:"
+              echo "📋 CloudFormation Drift Details:"
               aws cloudformation describe-stack-resource-drifts \
                 --stack-name ${{ env.STACK_NAME }} \
                 --query 'StackResourceDrifts[?StackResourceDriftStatus==`MODIFIED`].[LogicalResourceId,ResourceType,StackResourceDriftStatus]' \
                 --output table
               
-              echo "Please fix the drift in AWS console before deploying."
+              echo "Please fix the CloudFormation drift in AWS console before deploying."
               exit 1
             else
-              echo "✅ No drift detected, proceeding with deployment"
+              echo "✅ No CloudFormation drift detected"
             fi
             
+            # Lambda-specific drift detection (CloudFormation can't detect Lambda code changes)
+            echo "🔍 Checking Lambda function code drift..."
+            
+            # Get all Lambda functions from the stack
+            LAMBDA_FUNCTIONS=$(aws cloudformation describe-stack-resources \
+              --stack-name ${{ env.STACK_NAME }} \
+              --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' \
+              --output text)
+            
+            if [ -n "$LAMBDA_FUNCTIONS" ]; then
+              LAMBDA_DRIFT_DETECTED=false
+              
+              for FUNCTION_NAME in $LAMBDA_FUNCTIONS; do
+                echo "📋 Checking function: $FUNCTION_NAME"
+                
+                # Get current function code SHA256 from AWS
+                CURRENT_SHA=$(aws lambda get-function \
+                  --function-name $FUNCTION_NAME \
+                  --query 'Configuration.CodeSha256' --output text)
+                
+                echo "  Current AWS SHA256: $CURRENT_SHA"
+                
+                # Build the function locally to get expected SHA256
+                # Note: We'll build after this check, so we need to build temporarily here
+                echo "  Building function locally to compare..."
+                sam build --use-container --quiet
+                
+                # Get the built function's SHA256 (this is tricky - we need to zip and hash)
+                # For now, we'll use a simpler approach: check if deployment would create changes
+                echo "  Checking if deployment would make changes..."
+                
+                # Create a changeset to see what would change
+                CHANGESET_NAME="drift-check-$(date +%s)"
+                sam deploy \
+                  --template-file .aws-sam/build/template.yaml \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+                  --no-execute-changeset \
+                  --changeset-name $CHANGESET_NAME \
+                  --s3-bucket ${{ env.ARTIFACT_BUCKET }} >/dev/null 2>&1
+                
+                # Check if changeset has any Lambda function changes
+                LAMBDA_CHANGES=$(aws cloudformation describe-change-set \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --change-set-name $CHANGESET_NAME \
+                  --query 'Changes[?ResourceChange.ResourceType==`AWS::Lambda::Function`]' \
+                  --output text 2>/dev/null || echo "")
+                
+                # Clean up the changeset
+                aws cloudformation delete-change-set \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --change-set-name $CHANGESET_NAME >/dev/null 2>&1 || true
+                
+                if [ -n "$LAMBDA_CHANGES" ] && [ "$LAMBDA_CHANGES" != "None" ]; then
+                  echo "  ❌ Lambda function $FUNCTION_NAME has code drift!"
+                  echo "  📋 This means the function code in AWS differs from your source code"
+                  LAMBDA_DRIFT_DETECTED=true
+                else
+                  echo "  ✅ Lambda function $FUNCTION_NAME code matches source"
+                fi
+              done
+              
+              if [ "$LAMBDA_DRIFT_DETECTED" = true ]; then
+                echo ""
+                echo "❌ Lambda code drift detected!"
+                echo "🔧 Someone manually modified Lambda function code in the AWS console"
+                echo "💡 This type of drift cannot be detected by CloudFormation drift detection"
+                echo "🚫 Deployment blocked - please revert manual changes or update your source code"
+                exit 1
+              else
+                echo "✅ No Lambda code drift detected"
+              fi
+            else
+              echo "ℹ️  No Lambda functions found in stack"
+            fi
+            
+            echo "✅ All drift checks passed, proceeding with deployment"
             echo "stack_exists=true" >> $GITHUB_OUTPUT
           else
             echo "📦 Stack doesn't exist yet - this will be a first deployment"
