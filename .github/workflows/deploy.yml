@@ -143,8 +143,7 @@ jobs:
                 # Find the function's logical ID from the template
                 LOGICAL_ID=$(aws cloudformation describe-stack-resources \
                   --stack-name ${{ env.STACK_NAME }} \
-                  --physical-resource-id $FUNCTION_NAME \
-                  --query 'StackResources[0].LogicalResourceId' --output text)
+                  --query "StackResources[?PhysicalResourceId=='$FUNCTION_NAME'].LogicalResourceId" --output text)
                 
                 echo "  Function logical ID: $LOGICAL_ID"
                 
