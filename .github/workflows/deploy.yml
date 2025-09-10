@@ -151,29 +151,72 @@ jobs:
                   rm current-code.zip
                   cd - >/dev/null
                   
-                  # Find the source function directory
+                  # Find the source function directory using dynamic mapping
                   SOURCE_FUNCTION_DIR=""
                   # Convert logical ID to lowercase for case-insensitive matching
                   LOGICAL_ID_LOWER=$(echo "$LOGICAL_ID" | tr '[:upper:]' '[:lower:]')
                   
-                  if [ -d "src/functions/testFunction" ] && [[ "$LOGICAL_ID_LOWER" == *"testfunction"* ]]; then
-                    SOURCE_FUNCTION_DIR="src/functions/testFunction"
-                  elif [ -d "src/functions/order-service" ] && [[ "$LOGICAL_ID_LOWER" == *"order"* ]]; then
-                    SOURCE_FUNCTION_DIR="src/functions/order-service"
-                  elif [ -d "src/functions/user-service" ] && [[ "$LOGICAL_ID_LOWER" == *"user"* ]]; then
-                    SOURCE_FUNCTION_DIR="src/functions/user-service"
-                  else
-                    # Try to find by case-insensitive directory name matching
-                    for func_dir in src/functions/*/; do
-                      if [ -d "$func_dir" ]; then
-                        func_name=$(basename "$func_dir")
-                        func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
-                        if [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]]; then
-                          SOURCE_FUNCTION_DIR="$func_dir"
-                          break
-                        fi
+                  echo "  Attempting to map logical ID '$LOGICAL_ID' to source directory..."
+                  
+                  # Dynamic mapping strategy with multiple approaches
+                  for func_dir in src/functions/*/; do
+                    if [ -d "$func_dir" ]; then
+                      func_name=$(basename "$func_dir")
+                      func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
+                      
+                      echo "    Checking directory: $func_name"
+                      
+                      # Strategy 1: Exact match (case-insensitive)
+                      if [ "$LOGICAL_ID_LOWER" = "$func_name_lower" ]; then
+                        echo "    ✅ Exact match found: $func_name"
+                        SOURCE_FUNCTION_DIR="$func_dir"
+                        break
                       fi
-                    done
+                      
+                      # Strategy 2: Logical ID contains directory name
+                      if [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]]; then
+                        echo "    ✅ Substring match found: $func_name (in $LOGICAL_ID)"
+                        SOURCE_FUNCTION_DIR="$func_dir"
+                        break
+                      fi
+                      
+                      # Strategy 3: Directory name contains logical ID
+                      if [[ "$func_name_lower" == *"$LOGICAL_ID_LOWER"* ]]; then
+                        echo "    ✅ Reverse substring match found: $LOGICAL_ID (in $func_name)"
+                        SOURCE_FUNCTION_DIR="$func_dir"
+                        break
+                      fi
+                      
+                      # Strategy 4: Handle kebab-case to camelCase conversion
+                      # Convert kebab-case to camelcase for comparison
+                      func_name_camel=$(echo "$func_name" | sed 's/-\([a-z]\)/\U\1/g')
+                      func_name_camel_lower=$(echo "$func_name_camel" | tr '[:upper:]' '[:lower:]')
+                      
+                      if [[ "$LOGICAL_ID_LOWER" == *"$func_name_camel_lower"* ]]; then
+                        echo "    ✅ Kebab-to-camel match found: $func_name -> $func_name_camel"
+                        SOURCE_FUNCTION_DIR="$func_dir"
+                        break
+                      fi
+                      
+                      # Strategy 5: Handle camelCase to kebab-case conversion
+                      # Convert camelCase logical ID to kebab-case for comparison
+                      logical_id_kebab=$(echo "$LOGICAL_ID" | sed 's/\([A-Z]\)/-\L\1/g' | sed 's/^-//')
+                      logical_id_kebab_lower=$(echo "$logical_id_kebab" | tr '[:upper:]' '[:lower:]')
+                      
+                      if [[ "$logical_id_kebab_lower" == *"$func_name_lower"* ]]; then
+                        echo "    ✅ Camel-to-kebab match found: $LOGICAL_ID -> $logical_id_kebab"
+                        SOURCE_FUNCTION_DIR="$func_dir"
+                        break
+                      fi
+                      
+                      echo "    ❌ No match for: $func_name"
+                    fi
+                  done
+                  
+                  if [ -n "$SOURCE_FUNCTION_DIR" ]; then
+                    echo "  🎯 Successfully mapped '$LOGICAL_ID' to '$SOURCE_FUNCTION_DIR'"
+                  else
+                    echo "  ❌ Could not map '$LOGICAL_ID' to any source directory"
                   fi
                   
                   if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
