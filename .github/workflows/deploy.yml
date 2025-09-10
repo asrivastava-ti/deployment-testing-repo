@@ -56,30 +56,55 @@ jobs:
           sam validate --template template.yaml
           cfn-lint template.yaml
 
+      - name: Initial Drift Check
+        id: initial-drift
+        run: |
+          if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} >/dev/null 2>&1; then
+            echo "✅ Stack exists, checking for drift..."
+            
+            # Start drift detection
+            DRIFT_ID=$(aws cloudformation detect-stack-drift \
+              --stack-name ${{ env.STACK_NAME }} \
+              --query 'StackDriftDetectionId' --output text)
+            
+            echo "Drift detection started with ID: $DRIFT_ID"
+            
+            # Wait for completion
+            aws cloudformation wait stack-drift-detection-complete \
+              --stack-drift-detection-id $DRIFT_ID
+            
+            # Get drift status
+            DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
+              --stack-drift-detection-id $DRIFT_ID \
+              --query 'StackDriftStatus' --output text)
+            
+            echo "Drift status: $DRIFT_STATUS"
+            
+            if [ "$DRIFT_STATUS" = "DRIFTED" ]; then
+              echo "❌ Stack has drifted! Manual changes detected."
+              
+              # Get detailed drift information
+              echo "📋 Drift Details:"
+              aws cloudformation describe-stack-resource-drifts \
+                --stack-name ${{ env.STACK_NAME }} \
+                --query 'StackResourceDrifts[?StackResourceDriftStatus==`MODIFIED`].[LogicalResourceId,ResourceType,StackResourceDriftStatus]' \
+                --output table
+              
+              echo "Please fix the drift in AWS console before deploying."
+              exit 1
+            else
+              echo "✅ No drift detected, proceeding with deployment"
+            fi
+            
+            echo "stack_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "📦 Stack doesn't exist yet - this will be a first deployment"
+            echo "✅ Will create stack and then check for drift"
+            echo "stack_exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build (use Lambda-like container for deps)
         run: sam build --use-container
-
-      - name: Detect CloudFormation Drift
-        run: |
-          # Start drift detection
-          DRIFT_ID=$(aws cloudformation detect-stack-drift \
-            --stack-name ${{ env.STACK_NAME }} \
-            --query 'StackDriftDetectionId' --output text)
-
-          # Wait for completion and check results
-          aws cloudformation wait stack-drift-detection-complete \
-            --stack-drift-detection-id $DRIFT_ID
-
-          # Get drift status
-          DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
-            --stack-drift-detection-id $DRIFT_ID \
-            --query 'StackDriftStatus' --output text)
-
-          if [ "$DRIFT_STATUS" = "DRIFTED" ]; then
-            echo "❌ Stack has drifted! Manual changes detected."
-            exit 1
-          fi
- 
 
       - name: Package
         run: |
@@ -88,10 +113,91 @@ jobs:
                --s3-bucket ${{ env.ARTIFACT_BUCKET }} \
                --output-template-file packaged.yaml
 
-      - name: Deploy
+      - name: Create Stack Infrastructure (First Deployment)
+        if: steps.initial-drift.outputs.stack_exists == 'false'
         run: |
+          echo "🚀 Creating new stack infrastructure..."
+          
+          # Create changeset without executing it
+          sam deploy \
+               --template-file packaged.yaml \
+               --stack-name ${{ env.STACK_NAME }} \
+               --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+               --no-execute-changeset
+          
+          # Execute the changeset to create stack
+          CHANGESET_NAME=$(aws cloudformation list-change-sets \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Summaries[0].ChangeSetName' --output text)
+          
+          echo "Executing changeset: $CHANGESET_NAME"
+          aws cloudformation execute-change-set \
+            --change-set-name $CHANGESET_NAME \
+            --stack-name ${{ env.STACK_NAME }}
+          
+          # Wait for stack creation to complete
+          echo "⏳ Waiting for stack creation to complete..."
+          aws cloudformation wait stack-create-complete \
+            --stack-name ${{ env.STACK_NAME }}
+          
+          echo "✅ Stack infrastructure created successfully"
+
+      - name: Post-Creation Drift Check (New Stacks Only)
+        if: steps.initial-drift.outputs.stack_exists == 'false'
+        run: |
+          echo "🔍 Running drift check after stack creation (before deployment)..."
+          
+          # Wait a moment for stack to stabilize
+          sleep 10
+          
+          # Start drift detection
+          DRIFT_ID=$(aws cloudformation detect-stack-drift \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'StackDriftDetectionId' --output text)
+          
+          echo "Drift detection started with ID: $DRIFT_ID"
+          
+          # Wait for completion
+          aws cloudformation wait stack-drift-detection-complete \
+            --stack-drift-detection-id $DRIFT_ID
+          
+          # Get drift status
+          DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
+            --stack-drift-detection-id $DRIFT_ID \
+            --query 'StackDriftStatus' --output text)
+          
+          echo "Post-creation drift status: $DRIFT_STATUS"
+          
+          if [ "$DRIFT_STATUS" = "DRIFTED" ]; then
+            echo "❌ Stack has drifted after creation! Manual changes detected."
+            
+            # Get detailed drift information
+            echo "📋 Drift Details:"
+            aws cloudformation describe-stack-resource-drifts \
+              --stack-name ${{ env.STACK_NAME }} \
+              --query 'StackResourceDrifts[?StackResourceDriftStatus==`MODIFIED`].[LogicalResourceId,ResourceType,StackResourceDriftStatus]' \
+              --output table
+            
+            echo "⚠️  Someone made manual changes to the stack after creation!"
+            echo "❌ Deployment blocked - fix drift before proceeding"
+            exit 1
+          else
+            echo "✅ No drift detected after stack creation"
+            echo "✅ Proceeding with code deployment..."
+          fi
+
+      - name: Deploy Code (Final Step)
+        run: |
+          if [ "${{ steps.initial-drift.outputs.stack_exists }}" == "true" ]; then
+            echo "🔄 Updating existing stack with new code..."
+          else
+            echo "📦 Deploying code to newly created stack..."
+          fi
+          
           sam deploy \
                --template-file packaged.yaml \
                --stack-name ${{ env.STACK_NAME }} \
                --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
                --no-fail-on-empty-changeset
+          
+          echo "✅ Deployment completed successfully"
