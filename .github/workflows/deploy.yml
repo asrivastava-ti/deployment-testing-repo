@@ -136,7 +136,7 @@ jobs:
                 # Build the function locally to get expected SHA256
                 # Note: We'll build after this check, so we need to build temporarily here
                 echo "  Building function locally to compare..."
-                sam build --use-container --quiet
+                sam build --use-container
                 
                 # Get the built function's SHA256 (this is tricky - we need to zip and hash)
                 # For now, we'll use a simpler approach: check if deployment would create changes
