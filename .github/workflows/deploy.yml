@@ -607,20 +607,69 @@ jobs:
                 if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
                   echo "  📁 Updating source directory: $SOURCE_FUNCTION_DIR"
                   
+                  # List what's in the temp directory
+                  echo "  📋 Files downloaded from console:"
+                  ls -la "$TEMP_DIR/" || echo "  ⚠️  Could not list temp directory contents"
+                  
+                  # List what's in the source directory
+                  echo "  📋 Files in source directory:"
+                  ls -la "$SOURCE_FUNCTION_DIR/" || echo "  ⚠️  Could not list source directory contents"
+                  
                   # Find main file and update it
                   MAIN_FILE=""
                   if [ -f "$SOURCE_FUNCTION_DIR/lambda_function.py" ]; then
                     MAIN_FILE="lambda_function.py"
+                    echo "  📝 Found lambda_function.py in source directory"
                   elif [ -f "$SOURCE_FUNCTION_DIR/app.py" ]; then
                     MAIN_FILE="app.py"
+                    echo "  📝 Found app.py in source directory"
                   elif [ -f "$SOURCE_FUNCTION_DIR/index.js" ]; then
                     MAIN_FILE="index.js"
+                    echo "  📝 Found index.js in source directory"
+                  else
+                    echo "  ⚠️  No main file found in source directory"
                   fi
                   
-                  if [ -n "$MAIN_FILE" ] && [ -f "$TEMP_DIR/$MAIN_FILE" ]; then
-                    echo "  📝 Updating $MAIN_FILE with console changes"
-                    cp "$TEMP_DIR/$MAIN_FILE" "$SOURCE_FUNCTION_DIR/$MAIN_FILE"
+                  if [ -n "$MAIN_FILE" ]; then
+                    if [ -f "$TEMP_DIR/$MAIN_FILE" ]; then
+                      echo "  📝 Console has $MAIN_FILE - comparing with repository version"
+                      
+                      # Show file sizes for comparison
+                      REPO_SIZE=$(stat -c%s "$SOURCE_FUNCTION_DIR/$MAIN_FILE" 2>/dev/null || echo "0")
+                      CONSOLE_SIZE=$(stat -c%s "$TEMP_DIR/$MAIN_FILE" 2>/dev/null || echo "0")
+                      echo "  📊 Repository file size: $REPO_SIZE bytes"
+                      echo "  📊 Console file size: $CONSOLE_SIZE bytes"
+                      
+                      # Show checksums for comparison
+                      REPO_CHECKSUM=$(sha256sum "$SOURCE_FUNCTION_DIR/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
+                      CONSOLE_CHECKSUM=$(sha256sum "$TEMP_DIR/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
+                      echo "  🔍 Repository checksum: $REPO_CHECKSUM"
+                      echo "  🔍 Console checksum: $CONSOLE_CHECKSUM"
+                      
+                      if [ "$REPO_CHECKSUM" != "$CONSOLE_CHECKSUM" ]; then
+                        echo "  ✅ Files are different - updating repository with console changes"
+                        cp "$TEMP_DIR/$MAIN_FILE" "$SOURCE_FUNCTION_DIR/$MAIN_FILE"
+                        echo "  📝 Updated $MAIN_FILE with console changes"
+                        
+                        # Verify the copy worked
+                        NEW_CHECKSUM=$(sha256sum "$SOURCE_FUNCTION_DIR/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
+                        echo "  ✅ New repository checksum: $NEW_CHECKSUM"
+                        
+                        if [ "$NEW_CHECKSUM" = "$CONSOLE_CHECKSUM" ]; then
+                          echo "  ✅ File successfully updated with console changes"
+                        else
+                          echo "  ❌ File copy failed - checksums don't match"
+                        fi
+                      else
+                        echo "  ℹ️  Files are identical - no changes needed"
+                      fi
+                    else
+                      echo "  ⚠️  Console download doesn't contain $MAIN_FILE"
+                      echo "  📋 Console files available: $(ls "$TEMP_DIR/" 2>/dev/null | tr '\n' ' ')"
+                    fi
                   fi
+                else
+                  echo "  ❌ Could not map function to source directory"
                 fi
                 
                 rm -rf "$TEMP_DIR"
@@ -628,14 +677,47 @@ jobs:
             done
             
             # Configure git for the commit
+            echo ""
+            echo "🔧 Configuring git for commit..."
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             
+            echo "📋 Git configuration:"
+            echo "  User: $(git config user.name)"
+            echo "  Email: $(git config user.email)"
+            
+            # Check current git status
+            echo ""
+            echo "📋 Current git status:"
+            git status
+            
+            echo ""
+            echo "📋 Files in src/functions/ directory:"
+            find src/functions/ -type f -name "*.py" -o -name "*.js" | head -20
+            
             # Add and commit the changes
+            echo ""
+            echo "🔧 Adding changes to git..."
             git add src/functions/
+            
+            echo "📋 Git status after adding files:"
+            git status
+            
+            echo ""
+            echo "📋 Staged changes:"
+            git diff --staged --name-only || echo "No staged changes found"
+            
+            echo ""
+            echo "📋 Detailed staged changes:"
+            git diff --staged || echo "No staged changes to show"
+            
             if git diff --staged --quiet; then
-              echo "ℹ️  No changes to commit"
+              echo ""
+              echo "ℹ️  No changes to commit - files are identical"
+              echo "📋 This means the console changes match the repository files"
             else
+              echo ""
+              echo "✅ Changes detected - creating commit..."
               git commit -m "Accept console changes from AWS Lambda functions
 
               This commit incorporates manual changes that were made directly in the AWS console.
@@ -645,6 +727,10 @@ jobs:
               Original commit: ${{ github.sha }}"
               
               echo "✅ Console changes committed to repository"
+              
+              echo ""
+              echo "📋 Latest commit:"
+              git log -1 --oneline
             fi
           fi
 
