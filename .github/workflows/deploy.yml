@@ -453,7 +453,7 @@ jobs:
           fi
 
       - name: Handle Drift Detection
-        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.force_deploy != 'true' && github.event.inputs.drift_resolution == 'prompt'
+        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.force_deploy != 'true' && (github.event.inputs.drift_resolution == 'prompt' || github.event.inputs.drift_resolution == '' || github.event.inputs.drift_resolution == null)
         run: |
           echo "🚨 DRIFT DETECTED - MANUAL APPROVAL REQUIRED"
           echo ""
@@ -614,7 +614,7 @@ jobs:
           exit 1
 
       - name: Deploy Code (Final Step)
-        if: github.event.inputs.force_deploy == 'true' || steps.initial-drift.outputs.drift_detected != 'true' || github.event.inputs.drift_resolution == 'accept_console' || github.event.inputs.drift_resolution == 'overwrite_console'
+        if: github.event.inputs.force_deploy == 'true' || steps.initial-drift.outputs.drift_detected != 'true' || (steps.initial-drift.outputs.drift_detected == 'true' && (github.event.inputs.drift_resolution == 'accept_console' || github.event.inputs.drift_resolution == 'overwrite_console'))
         run: |
           if [ "${{ github.event.inputs.force_deploy }}" == "true" ]; then
             echo "🚀 Force deployment - bypassing all drift checks"
