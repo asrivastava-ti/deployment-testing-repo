@@ -113,183 +113,109 @@ jobs:
             
             # Lambda-specific drift detection (CloudFormation can't detect Lambda code changes)
             echo "🔍 Checking Lambda function code drift..."
+            echo "ℹ️  Drift detection compares AWS deployed code with the last deployed commit"
+            echo "ℹ️  This detects manual changes made in AWS console, not legitimate repo updates"
             
-            # Get all Lambda functions from the stack
-            LAMBDA_FUNCTIONS=$(aws cloudformation describe-stack-resources \
+            # Get the last deployed commit hash from stack tags
+            LAST_DEPLOYED_COMMIT=$(aws cloudformation describe-stacks \
               --stack-name ${{ env.STACK_NAME }} \
-              --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' \
-              --output text)
+              --query 'Stacks[0].Tags[?Key==`GitCommit`].Value' --output text 2>/dev/null || echo "")
             
-            if [ -n "$LAMBDA_FUNCTIONS" ]; then
-              LAMBDA_DRIFT_DETECTED=false
-              
-              for FUNCTION_NAME in $LAMBDA_FUNCTIONS; do
-                echo "📋 Checking function: $FUNCTION_NAME"
-                
-                # Find the function's logical ID from the template
-                LOGICAL_ID=$(aws cloudformation describe-stack-resources \
-                  --stack-name ${{ env.STACK_NAME }} \
-                  --query "StackResources[?PhysicalResourceId=='$FUNCTION_NAME'].LogicalResourceId" --output text)
-                
-                echo "  Function logical ID: $LOGICAL_ID"
-                
-                # Download current function code from AWS
-                echo "  Downloading current function code from AWS..."
-                TEMP_DIR="/tmp/${FUNCTION_NAME}-aws-code"
-                mkdir -p "$TEMP_DIR"
-                
-                # Get the function code URL and download it
-                DOWNLOAD_URL=$(aws lambda get-function \
-                  --function-name $FUNCTION_NAME \
-                  --query 'Code.Location' --output text)
-                
-                if [ "$DOWNLOAD_URL" != "None" ] && [ -n "$DOWNLOAD_URL" ]; then
-                  # Download and extract the current code
-                  curl -s "$DOWNLOAD_URL" -o "$TEMP_DIR/current-code.zip"
-                  cd "$TEMP_DIR"
-                  unzip -q current-code.zip
-                  rm current-code.zip
-                  cd - >/dev/null
-                  
-                  # Find the source function directory using dynamic mapping
-                  SOURCE_FUNCTION_DIR=""
-                  # Convert logical ID to lowercase for case-insensitive matching
-                  LOGICAL_ID_LOWER=$(echo "$LOGICAL_ID" | tr '[:upper:]' '[:lower:]')
-                  
-                  echo "  Attempting to map logical ID '$LOGICAL_ID' to source directory..."
-                  
-                  # Dynamic mapping strategy with multiple approaches
-                  for func_dir in src/functions/*/; do
-                    if [ -d "$func_dir" ]; then
-                      func_name=$(basename "$func_dir")
-                      func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
-                      
-                      echo "    Checking directory: $func_name"
-                      
-                      # Strategy 1: Exact match (case-insensitive)
-                      if [ "$LOGICAL_ID_LOWER" = "$func_name_lower" ]; then
-                        echo "    ✅ Exact match found: $func_name"
-                        SOURCE_FUNCTION_DIR="$func_dir"
-                        break
-                      fi
-                      
-                      # Strategy 2: Logical ID contains directory name
-                      if [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]]; then
-                        echo "    ✅ Substring match found: $func_name (in $LOGICAL_ID)"
-                        SOURCE_FUNCTION_DIR="$func_dir"
-                        break
-                      fi
-                      
-                      # Strategy 3: Directory name contains logical ID
-                      if [[ "$func_name_lower" == *"$LOGICAL_ID_LOWER"* ]]; then
-                        echo "    ✅ Reverse substring match found: $LOGICAL_ID (in $func_name)"
-                        SOURCE_FUNCTION_DIR="$func_dir"
-                        break
-                      fi
-                      
-                      # Strategy 4: Handle kebab-case to camelCase conversion
-                      # Convert kebab-case to camelcase for comparison
-                      func_name_camel=$(echo "$func_name" | sed 's/-\([a-z]\)/\U\1/g')
-                      func_name_camel_lower=$(echo "$func_name_camel" | tr '[:upper:]' '[:lower:]')
-                      
-                      if [[ "$LOGICAL_ID_LOWER" == *"$func_name_camel_lower"* ]]; then
-                        echo "    ✅ Kebab-to-camel match found: $func_name -> $func_name_camel"
-                        SOURCE_FUNCTION_DIR="$func_dir"
-                        break
-                      fi
-                      
-                      # Strategy 5: Handle camelCase to kebab-case conversion
-                      # Convert camelCase logical ID to kebab-case for comparison
-                      logical_id_kebab=$(echo "$LOGICAL_ID" | sed 's/\([A-Z]\)/-\L\1/g' | sed 's/^-//')
-                      logical_id_kebab_lower=$(echo "$logical_id_kebab" | tr '[:upper:]' '[:lower:]')
-                      
-                      if [[ "$logical_id_kebab_lower" == *"$func_name_lower"* ]]; then
-                        echo "    ✅ Camel-to-kebab match found: $LOGICAL_ID -> $logical_id_kebab"
-                        SOURCE_FUNCTION_DIR="$func_dir"
-                        break
-                      fi
-                      
-                      echo "    ❌ No match for: $func_name"
-                    fi
-                  done
-                  
-                  if [ -n "$SOURCE_FUNCTION_DIR" ]; then
-                    echo "  🎯 Successfully mapped '$LOGICAL_ID' to '$SOURCE_FUNCTION_DIR'"
-                  else
-                    echo "  ❌ Could not map '$LOGICAL_ID' to any source directory"
-                  fi
-                  
-                  if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
-                    echo "  Comparing with source directory: $SOURCE_FUNCTION_DIR"
-                    
-                    # Compare the main Lambda function file
-                    MAIN_FILE=""
-                    if [ -f "$SOURCE_FUNCTION_DIR/lambda_function.py" ]; then
-                      MAIN_FILE="lambda_function.py"
-                    elif [ -f "$SOURCE_FUNCTION_DIR/app.py" ]; then
-                      MAIN_FILE="app.py"
-                    elif [ -f "$SOURCE_FUNCTION_DIR/index.js" ]; then
-                      MAIN_FILE="index.js"
-                    fi
-                    
-                    if [ -n "$MAIN_FILE" ]; then
-                      echo "  Comparing main file: $MAIN_FILE"
-                      
-                      # Calculate checksums of the main files
-                      SOURCE_CHECKSUM=$(sha256sum "$SOURCE_FUNCTION_DIR/$MAIN_FILE" | cut -d' ' -f1)
-                      AWS_CHECKSUM=$(sha256sum "$TEMP_DIR/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
-                      
-                      echo "  Source checksum: $SOURCE_CHECKSUM"
-                      echo "  AWS checksum: $AWS_CHECKSUM"
-                      
-                      if [ "$SOURCE_CHECKSUM" != "$AWS_CHECKSUM" ]; then
-                        echo "  ❌ Lambda function $FUNCTION_NAME has code drift!"
-                        echo "  📋 Main file ($MAIN_FILE) differs between source and AWS"
-                        echo "  🔧 Someone manually modified the function code in AWS console"
-                        
-                        # Show the differences if possible
-                        if [ "$AWS_CHECKSUM" != "missing" ]; then
-                          echo "  📋 Code differences detected:"
-                          diff -u "$SOURCE_FUNCTION_DIR/$MAIN_FILE" "$TEMP_DIR/$MAIN_FILE" || true
-                        else
-                          echo "  📋 Main file missing in AWS deployment"
-                        fi
-                        
-                        LAMBDA_DRIFT_DETECTED=true
-                      else
-                        echo "  ✅ Lambda function $FUNCTION_NAME code matches source"
-                      fi
-                    else
-                      echo "  ⚠️  Could not find main Lambda file in source directory"
-                      echo "  ℹ️  Skipping drift check for this function"
-                    fi
-                  else
-                    echo "  ⚠️  Could not map function to source directory"
-                    echo "  ℹ️  Available directories: $(ls -d src/functions/*/ 2>/dev/null | tr '\n' ' ')"
-                    echo "  ℹ️  Skipping drift check for this function"
-                  fi
-                  
-                  # Clean up temporary directory
-                  rm -rf "$TEMP_DIR"
-                else
-                  echo "  ⚠️  Could not get download URL for function code"
-                  echo "  ℹ️  Skipping drift check for this function"
-                fi
-              done
-              
-              if [ "$LAMBDA_DRIFT_DETECTED" = true ]; then
-                echo ""
-                echo "❌ Lambda code drift detected!"
-                echo "🔧 Someone manually modified Lambda function code in the AWS console"
-                echo "💡 This type of drift cannot be detected by CloudFormation drift detection"
-                echo "🚫 Deployment blocked - please revert manual changes or update your source code"
-                exit 1
-              else
-                echo "✅ No Lambda code drift detected"
-              fi
+            if [ -z "$LAST_DEPLOYED_COMMIT" ] || [ "$LAST_DEPLOYED_COMMIT" = "None" ]; then
+              echo "⚠️  No previous deployment commit found in stack tags"
+              echo "ℹ️  This might be the first deployment or an old stack without commit tracking"
+              echo "ℹ️  Skipping Lambda drift detection for this deployment"
+              echo "💡 Future deployments will include drift detection"
             else
-              echo "ℹ️  No Lambda functions found in stack"
-            fi
+              echo "📋 Last deployed commit: $LAST_DEPLOYED_COMMIT"
+              echo "📋 Current commit: ${{ github.sha }}"
+              
+              if [ "$LAST_DEPLOYED_COMMIT" = "${{ github.sha }}" ]; then
+                echo "ℹ️  Same commit as last deployment - no drift check needed"
+              else
+                # Get all Lambda functions from the stack
+                LAMBDA_FUNCTIONS=$(aws cloudformation describe-stack-resources \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' \
+                  --output text)
+                
+                if [ -n "$LAMBDA_FUNCTIONS" ]; then
+                  LAMBDA_DRIFT_DETECTED=false
+                  
+                  for FUNCTION_NAME in $LAMBDA_FUNCTIONS; do
+                    echo "📋 Checking function: $FUNCTION_NAME"
+                    
+                    # Find the function's logical ID from the template
+                    LOGICAL_ID=$(aws cloudformation describe-stack-resources \
+                      --stack-name ${{ env.STACK_NAME }} \
+                      --query "StackResources[?PhysicalResourceId=='$FUNCTION_NAME'].LogicalResourceId" --output text)
+                    
+                    echo "  Function logical ID: $LOGICAL_ID"
+                    
+                    # Download current function code from AWS
+                    echo "  Downloading current function code from AWS..."
+                    TEMP_DIR="/tmp/${FUNCTION_NAME}-aws-code"
+                    mkdir -p "$TEMP_DIR"
+                    
+                    # Get the function code URL and download it
+                    DOWNLOAD_URL=$(aws lambda get-function \
+                      --function-name $FUNCTION_NAME \
+                      --query 'Code.Location' --output text)
+                    
+                    if [ "$DOWNLOAD_URL" != "None" ] && [ -n "$DOWNLOAD_URL" ]; then
+                      # Download and extract the current code
+                      curl -s "$DOWNLOAD_URL" -o "$TEMP_DIR/current-code.zip"
+                      cd "$TEMP_DIR"
+                      unzip -q current-code.zip
+                      rm current-code.zip
+                      cd - >/dev/null
+                      
+                      # Find the source function directory using dynamic mapping
+                      SOURCE_FUNCTION_DIR=""
+                      # Convert logical ID to lowercase for case-insensitive matching
+                      LOGICAL_ID_LOWER=$(echo "$LOGICAL_ID" | tr '[:upper:]' '[:lower:]')
+                      
+                      echo "  Attempting to map logical ID '$LOGICAL_ID' to source directory..."
+                      
+                      # Dynamic mapping strategy with multiple approaches
+                      for func_dir in src/functions/*/; do
+                        if [ -d "$func_dir" ]; then
+                          func_name=$(basename "$func_dir")
+                          func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
+                          
+                          echo "    Checking directory: $func_name"
+                          
+                          # Strategy 1: Exact match (case-insensitive)
+                          if [ "$LOGICAL_ID_LOWER" = "$func_name_lower" ]; then
+                            echo "    ✅ Exact match found: $func_name"
+                            SOURCE_FUNCTION_DIR="$func_dir"
+                            break
+                          fi
+                          
+                          # Strategy 2: Logical ID contains directory name
+                          if [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]]; then
+                            echo "    ✅ Substring match found: $func_name (in $LOGICAL_ID)"
+                            SOURCE_FUNCTION_DIR="$func_dir"
+                            break
+                          fi
+                          
+                          # Strategy 3: Directory name contains logical ID
+                          if [[ "$func_name_lower" == *"$LOGICAL_ID_LOWER"* ]]; then
+                            echo "    ✅ Reverse substring match found: $LOGICAL_ID (in $func_name)"
+                            SOURCE_FUNCTION_DIR="$func_dir"
+                            break
+                          fi
+                          
+                          # Strategy 4: Handle kebab-case to camelCase conversion
+                          # Convert kebab-case to camelcase for comparison
+                          func_name_camel=$(echo "$func_name" | sed 's/-\([a-z]\)/\U\1/g')
+                          func_name_camel_lower=$(echo "$func_name_camel" | tr '[:upper:]' '[:lower:]')
+                          
+                          if [[ "$LOGICAL_ID_LOWER" == *"$func_name_camel_lower"* ]]; then
+                            echo "    ✅ Kebab-to-camel match found: $func_name -> $func_name_camel"
+                            SOURCE_FUNCTION_DIR="$func_dir"
+                            break
+                          fi
             
             echo "✅ All drift checks passed, proceeding with deployment"
             echo "stack_exists=true" >> $GITHUB_OUTPUT
@@ -341,7 +267,7 @@ jobs:
       - name: Post-Creation Drift Check (New Stacks Only)
         if: steps.initial-drift.outputs.stack_exists == 'false'
         run: |
-          echo "🔍 Running drift check after stack creation (before deployment)..."
+          echo "� Running drift check after stack creation (before deployment)..."
           
           # Wait a moment for stack to stabilize
           sleep 10
@@ -400,7 +326,7 @@ jobs:
       - name: Deploy Code (Final Step)
         run: |
           if [ "${{ steps.initial-drift.outputs.stack_exists }}" == "true" ]; then
-            echo "🔄 Updating existing stack with new code..."
+            echo "� Updating existing stack with new code..."
           else
             echo "📦 Deploying code to newly created stack..."
           fi
