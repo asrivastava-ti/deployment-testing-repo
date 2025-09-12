@@ -731,6 +731,12 @@ jobs:
               echo ""
               echo "📋 Latest commit:"
               git log -1 --oneline
+              
+              echo ""
+              echo "🚀 Pushing changes to remote repository..."
+              git push origin main
+              
+              echo "✅ Changes pushed to remote repository"
             fi
           fi
 
