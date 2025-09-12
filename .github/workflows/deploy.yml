@@ -133,6 +133,9 @@ jobs:
               if [ "$LAST_DEPLOYED_COMMIT" = "${{ github.sha }}" ]; then
                 echo "ℹ️  Same commit as last deployment - no drift check needed"
               else
+                echo "ℹ️  Different commit detected - this is a legitimate update, not drift"
+                echo "📋 Checking for manual changes made since last deployment..."
+                
                 # Get all Lambda functions from the stack
                 LAMBDA_FUNCTIONS=$(aws cloudformation describe-stack-resources \
                   --stack-name ${{ env.STACK_NAME }} \
@@ -154,8 +157,8 @@ jobs:
                     
                     # Download current function code from AWS
                     echo "  Downloading current function code from AWS..."
-                    TEMP_DIR="/tmp/${FUNCTION_NAME}-aws-code"
-                    mkdir -p "$TEMP_DIR"
+                    TEMP_DIR_AWS="/tmp/${FUNCTION_NAME}-aws-code"
+                    mkdir -p "$TEMP_DIR_AWS"
                     
                     # Get the function code URL and download it
                     DOWNLOAD_URL=$(aws lambda get-function \
@@ -163,12 +166,17 @@ jobs:
                       --query 'Code.Location' --output text)
                     
                     if [ "$DOWNLOAD_URL" != "None" ] && [ -n "$DOWNLOAD_URL" ]; then
-                      # Download and extract the current code
-                      curl -s "$DOWNLOAD_URL" -o "$TEMP_DIR/current-code.zip"
-                      cd "$TEMP_DIR"
+                      # Download and extract the current AWS code
+                      curl -s "$DOWNLOAD_URL" -o "$TEMP_DIR_AWS/current-code.zip"
+                      cd "$TEMP_DIR_AWS"
                       unzip -q current-code.zip
                       rm current-code.zip
                       cd - >/dev/null
+                      
+                      # Get the code from the last deployed commit for comparison
+                      echo "  Getting code from last deployed commit: $LAST_DEPLOYED_COMMIT"
+                      TEMP_DIR_LAST="/tmp/${FUNCTION_NAME}-last-commit"
+                      mkdir -p "$TEMP_DIR_LAST"
                       
                       # Find the source function directory using dynamic mapping
                       SOURCE_FUNCTION_DIR=""
@@ -221,9 +229,9 @@ jobs:
                       
                       # Check if mapping was successful
                       if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
-                        echo "  Comparing with source directory: $SOURCE_FUNCTION_DIR"
+                        echo "  Mapped to source directory: $SOURCE_FUNCTION_DIR"
                         
-                        # Compare the main Lambda function file
+                        # Get the file from the last deployed commit
                         MAIN_FILE=""
                         if [ -f "$SOURCE_FUNCTION_DIR/lambda_function.py" ]; then
                           MAIN_FILE="lambda_function.py"
@@ -236,29 +244,37 @@ jobs:
                         if [ -n "$MAIN_FILE" ]; then
                           echo "  Comparing main file: $MAIN_FILE"
                           
-                          # Calculate checksums of the main files
-                          SOURCE_CHECKSUM=$(sha256sum "$SOURCE_FUNCTION_DIR/$MAIN_FILE" | cut -d' ' -f1)
-                          AWS_CHECKSUM=$(sha256sum "$TEMP_DIR/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
+                          # Get the file content from the last deployed commit
+                          git show "$LAST_DEPLOYED_COMMIT:$SOURCE_FUNCTION_DIR$MAIN_FILE" > "$TEMP_DIR_LAST/$MAIN_FILE" 2>/dev/null || {
+                            echo "  ⚠️  Could not retrieve file from last deployed commit"
+                            echo "  ℹ️  Skipping drift check for this function"
+                            rm -rf "$TEMP_DIR_AWS" "$TEMP_DIR_LAST"
+                            continue
+                          }
                           
-                          echo "  Source checksum: $SOURCE_CHECKSUM"
-                          echo "  AWS checksum: $AWS_CHECKSUM"
+                          # Calculate checksums - compare AWS deployed code with last deployed commit
+                          LAST_COMMIT_CHECKSUM=$(sha256sum "$TEMP_DIR_LAST/$MAIN_FILE" | cut -d' ' -f1)
+                          AWS_CHECKSUM=$(sha256sum "$TEMP_DIR_AWS/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
                           
-                          if [ "$SOURCE_CHECKSUM" != "$AWS_CHECKSUM" ]; then
+                          echo "  Last deployed commit checksum: $LAST_COMMIT_CHECKSUM"
+                          echo "  AWS deployed checksum: $AWS_CHECKSUM"
+                          
+                          if [ "$LAST_COMMIT_CHECKSUM" != "$AWS_CHECKSUM" ]; then
                             echo "  ❌ Lambda function $FUNCTION_NAME has code drift!"
-                            echo "  📋 Main file ($MAIN_FILE) differs between source and AWS"
+                            echo "  📋 AWS deployed code differs from last deployed commit"
                             echo "  🔧 Someone manually modified the function code in AWS console"
                             
                             # Show the differences if possible
                             if [ "$AWS_CHECKSUM" != "missing" ]; then
                               echo "  📋 Code differences detected:"
-                              diff -u "$SOURCE_FUNCTION_DIR/$MAIN_FILE" "$TEMP_DIR/$MAIN_FILE" || true
+                              diff -u "$TEMP_DIR_LAST/$MAIN_FILE" "$TEMP_DIR_AWS/$MAIN_FILE" || true
                             else
                               echo "  📋 Main file missing in AWS deployment"
                             fi
                             
                             LAMBDA_DRIFT_DETECTED=true
                           else
-                            echo "  ✅ Lambda function $FUNCTION_NAME code matches source"
+                            echo "  ✅ Lambda function $FUNCTION_NAME matches last deployed commit"
                           fi
                         else
                           echo "  ⚠️  Could not find main Lambda file in source directory"
@@ -270,8 +286,8 @@ jobs:
                         echo "  ℹ️  Skipping drift check for this function"
                       fi
                       
-                      # Clean up temporary directory
-                      rm -rf "$TEMP_DIR"
+                      # Clean up temporary directories
+                      rm -rf "$TEMP_DIR_AWS" "$TEMP_DIR_LAST"
                     else
                       echo "  ⚠️  Could not get download URL for function code"
                       echo "  ℹ️  Skipping drift check for this function"
