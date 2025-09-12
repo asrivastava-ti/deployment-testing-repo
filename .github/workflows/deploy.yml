@@ -348,10 +348,16 @@ jobs:
             
             echo "✅ All drift checks passed, proceeding with deployment"
             echo "stack_exists=true" >> $GITHUB_OUTPUT
+            
+            # Ensure drift_detected is set if not already set
+            if ! grep -q "drift_detected=" $GITHUB_OUTPUT 2>/dev/null; then
+              echo "drift_detected=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "📦 Stack doesn't exist yet - this will be a first deployment"
             echo "✅ Will create stack and then check for drift"
             echo "stack_exists=false" >> $GITHUB_OUTPUT
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Build (use Lambda-like container for deps)
@@ -453,7 +459,7 @@ jobs:
           fi
 
       - name: Handle Drift Detection
-        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.force_deploy != 'true' && (github.event.inputs.drift_resolution == 'prompt' || github.event.inputs.drift_resolution == '' || github.event.inputs.drift_resolution == null)
+        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.force_deploy != 'true' && github.event.inputs.drift_resolution != 'accept_console' && github.event.inputs.drift_resolution != 'overwrite_console' && github.event.inputs.drift_resolution != 'abort'
         run: |
           echo "🚨 DRIFT DETECTED - MANUAL APPROVAL REQUIRED"
           echo ""
@@ -464,7 +470,8 @@ jobs:
           echo "  2. Overwrite Console Changes - Deploy repository code (discards console changes)"
           echo "  3. Abort - Stop deployment for manual investigation"
           echo ""
-          echo "⚠️  Current Resolution Setting: ${{ github.event.inputs.drift_resolution || 'prompt' }}"
+          echo "⚠️  Current Resolution Setting: ${{ github.event.inputs.drift_resolution || 'prompt (default)' }}"
+          echo "⚠️  Trigger Type: ${{ github.event_name }}"
           echo ""
           echo "🛑 Workflow paused for manual approval"
           echo "👤 Please review the drift details above and re-run this workflow with your chosen resolution:"
