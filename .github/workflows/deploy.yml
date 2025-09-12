@@ -746,6 +746,10 @@ jobs:
               # Export the new commit SHA for use in deployment step
               echo "DEPLOYMENT_COMMIT_SHA=$NEW_COMMIT_SHA" >> $GITHUB_ENV
               echo "✅ Updated deployment commit SHA for stack tagging"
+              
+              # Set flag to rebuild since we updated source code
+              echo "NEED_REBUILD=true" >> $GITHUB_ENV
+              echo "✅ Marked for rebuild due to console changes acceptance"
             fi
           fi
 
@@ -788,6 +792,29 @@ jobs:
           echo "  - overwrite_console: Deploy repository code (discards console changes)"
           echo "  - force_deploy: Bypass all drift checks"
           exit 1
+
+      - name: Rebuild After Console Changes
+        if: env.NEED_REBUILD == 'true'
+        run: |
+          echo "🔄 Rebuilding and repackaging after accepting console changes..."
+          echo ""
+          echo "📋 Source code was updated with console changes"
+          echo "📋 Need to rebuild to include the updated code in deployment"
+          echo ""
+          
+          echo "🔧 Regenerating template.yaml with updated source code..."
+          python scripts/generate_template.py
+          
+          echo "🔧 Rebuilding with updated source code..."
+          sam build --use-container
+          
+          echo "🔧 Repackaging with updated build..."
+          sam package \
+               --template-file .aws-sam/build/template.yaml \
+               --s3-bucket ${{ env.ARTIFACT_BUCKET }} \
+               --output-template-file packaged.yaml
+          
+          echo "✅ Rebuild completed - deployment package now contains console changes"
 
       - name: Deploy Code (Final Step)
         if: github.event.inputs.force_deploy == 'true' || steps.initial-drift.outputs.drift_detected != 'true' || (steps.initial-drift.outputs.drift_detected == 'true' && (github.event.inputs.drift_resolution == 'accept_console' || github.event.inputs.drift_resolution == 'overwrite_console'))
