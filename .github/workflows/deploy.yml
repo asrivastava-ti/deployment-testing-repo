@@ -525,18 +525,79 @@ jobs:
                 rm console-code.zip
                 cd - >/dev/null
                 
-                # Map to source directory (reuse mapping logic)
+                # Map to source directory using enhanced logic (same as overwrite_console)
                 SOURCE_FUNCTION_DIR=""
                 LOGICAL_ID_LOWER=$(echo "$LOGICAL_ID" | tr '[:upper:]' '[:lower:]')
+                
+                echo "  🔍 Mapping function '$FUNCTION_NAME' (logical: '$LOGICAL_ID') to source directory..."
+                echo "  📋 Available directories: $(ls -d src/functions/*/ 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
                 
                 for func_dir in src/functions/*/; do
                   if [ -d "$func_dir" ]; then
                     func_name=$(basename "$func_dir")
                     func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
                     
-                    if [ "$LOGICAL_ID_LOWER" = "$func_name_lower" ] || \
-                       [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]] || \
-                       [[ "$func_name_lower" == *"$LOGICAL_ID_LOWER"* ]]; then
+                    echo "    🔍 Checking directory: $func_name"
+                    
+                    # Strategy 1: Exact match (case-insensitive)
+                    if [ "$LOGICAL_ID_LOWER" = "$func_name_lower" ]; then
+                      echo "    ✅ Exact match found: $func_name"
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                    
+                    # Strategy 2: Function name matches directory name
+                    FUNCTION_NAME_LOWER=$(echo "$FUNCTION_NAME" | tr '[:upper:]' '[:lower:]')
+                    if [ "$FUNCTION_NAME_LOWER" = "$func_name_lower" ]; then
+                      echo "    ✅ Function name match found: $func_name"
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                    
+                    # Strategy 3: Logical ID contains directory name
+                    if [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]]; then
+                      echo "    ✅ Substring match found: $func_name (in $LOGICAL_ID)"
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                    
+                    # Strategy 4: Directory name contains logical ID
+                    if [[ "$func_name_lower" == *"$LOGICAL_ID_LOWER"* ]]; then
+                      echo "    ✅ Reverse substring match found: $LOGICAL_ID (in $func_name)"
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                    
+                    # Strategy 5: Function name contains directory name
+                    if [[ "$FUNCTION_NAME_LOWER" == *"$func_name_lower"* ]]; then
+                      echo "    ✅ Function name contains directory: $func_name (in $FUNCTION_NAME)"
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                    
+                    # Strategy 6: Directory name contains function name
+                    if [[ "$func_name_lower" == *"$FUNCTION_NAME_LOWER"* ]]; then
+                      echo "    ✅ Directory contains function name: $FUNCTION_NAME (in $func_name)"
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                    
+                    # Strategy 7: Handle kebab-case to camelCase conversion
+                    func_name_camel=$(echo "$func_name" | sed 's/-\([a-z]\)/\U\1/g')
+                    func_name_camel_lower=$(echo "$func_name_camel" | tr '[:upper:]' '[:lower:]')
+                    
+                    if [[ "$LOGICAL_ID_LOWER" == *"$func_name_camel_lower"* ]]; then
+                      echo "    ✅ Kebab-to-camel match found: $func_name -> $func_name_camel"
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                    
+                    # Strategy 8: Handle camelCase to kebab-case conversion
+                    logical_id_kebab=$(echo "$LOGICAL_ID" | sed 's/\([A-Z]\)/-\L\1/g' | sed 's/^-//')
+                    logical_id_kebab_lower=$(echo "$logical_id_kebab" | tr '[:upper:]' '[:lower:]')
+                    
+                    if [ "$logical_id_kebab_lower" = "$func_name_lower" ]; then
+                      echo "    ✅ CamelCase-to-kebab match found: $LOGICAL_ID -> $logical_id_kebab"
                       SOURCE_FUNCTION_DIR="$func_dir"
                       break
                     fi
