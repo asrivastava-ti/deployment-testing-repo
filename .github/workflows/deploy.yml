@@ -342,17 +342,18 @@ jobs:
                   fi
                 else
                   echo "ℹ️  No Lambda functions found in stack"
+                  echo "drift_detected=false" >> $GITHUB_OUTPUT
                 fi
               fi
             fi
             
-            echo "✅ All drift checks passed, proceeding with deployment"
-            echo "stack_exists=true" >> $GITHUB_OUTPUT
-            
-            # Ensure drift_detected is set if not already set
+            # Ensure drift_detected is set for cases where no Lambda drift check was performed
             if ! grep -q "drift_detected=" $GITHUB_OUTPUT 2>/dev/null; then
               echo "drift_detected=false" >> $GITHUB_OUTPUT
             fi
+            
+            echo "✅ All drift checks passed, proceeding with deployment"
+            echo "stack_exists=true" >> $GITHUB_OUTPUT
           else
             echo "📦 Stack doesn't exist yet - this will be a first deployment"
             echo "✅ Will create stack and then check for drift"
@@ -601,6 +602,12 @@ jobs:
           echo ""
           echo "✅ Proceeding with deployment - console changes will be overwritten"
           echo "📋 Repository code will be deployed as the authoritative source"
+          echo ""
+          echo "🔧 Debug Info:"
+          echo "  - drift_detected: ${{ steps.initial-drift.outputs.drift_detected }}"
+          echo "  - drift_resolution: ${{ github.event.inputs.drift_resolution }}"
+          echo "  - force_deploy: ${{ github.event.inputs.force_deploy }}"
+          echo "  - Next step (Deploy Code) should run with overwrite_console logic"
 
       - name: Abort on Drift
         if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.drift_resolution == 'abort'
@@ -623,6 +630,13 @@ jobs:
       - name: Deploy Code (Final Step)
         if: github.event.inputs.force_deploy == 'true' || steps.initial-drift.outputs.drift_detected != 'true' || (steps.initial-drift.outputs.drift_detected == 'true' && (github.event.inputs.drift_resolution == 'accept_console' || github.event.inputs.drift_resolution == 'overwrite_console'))
         run: |
+          echo "🔧 Deploy Code Step - Debug Info:"
+          echo "  - force_deploy: ${{ github.event.inputs.force_deploy }}"
+          echo "  - drift_detected: ${{ steps.initial-drift.outputs.drift_detected }}"
+          echo "  - drift_resolution: ${{ github.event.inputs.drift_resolution }}"
+          echo "  - stack_exists: ${{ steps.initial-drift.outputs.stack_exists }}"
+          echo ""
+          
           if [ "${{ github.event.inputs.force_deploy }}" == "true" ]; then
             echo "🚀 Force deployment - bypassing all drift checks"
           elif [ "${{ steps.initial-drift.outputs.drift_detected }}" == "true" ]; then
@@ -630,12 +644,20 @@ jobs:
               echo "✅ Deploying with accepted console changes"
             elif [ "${{ github.event.inputs.drift_resolution }}" == "overwrite_console" ]; then
               echo "🔄 Deploying repository code - overwriting console changes"
+              echo "⚠️  This deployment will replace AWS Lambda code with repository code"
+              echo "⚠️  Any manual console changes will be permanently lost"
             fi
           elif [ "${{ steps.initial-drift.outputs.stack_exists }}" == "true" ]; then
             echo "🔄 Updating existing stack with new code..."
           else
             echo "📦 Deploying code to newly created stack..."
           fi
+          
+          echo ""
+          echo "🚀 Starting SAM deployment..."
+          echo "📋 Template: packaged.yaml"
+          echo "📋 Stack: ${{ env.STACK_NAME }}"
+          echo ""
           
           sam deploy \
                --template-file packaged.yaml \
@@ -648,6 +670,14 @@ jobs:
                       DeploymentTime=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
                       WorkflowRun=${{ github.run_id }}
           
+          echo ""
           echo "✅ Deployment completed successfully"
           echo "📋 Tagged stack with commit: ${{ github.sha }}"
           echo "📋 Future deployments will use this commit for drift detection"
+          
+          if [ "${{ github.event.inputs.drift_resolution }}" == "overwrite_console" ]; then
+            echo ""
+            echo "🔄 Console changes have been overwritten with repository code"
+            echo "✅ AWS Lambda functions now match the repository source code"
+            echo "📋 Drift has been resolved by overwriting console changes"
+          fi
