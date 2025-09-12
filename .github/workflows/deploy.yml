@@ -968,10 +968,19 @@ jobs:
                 if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
                   echo "  📁 Source directory: $SOURCE_FUNCTION_DIR"
                   
-                  # Create a temporary zip with the repository code
+                  # Create a temporary zip with the repository code (exclude config files)
                   TEMP_ZIP="/tmp/${FUNCTION_NAME}-repo-code.zip"
                   cd "$SOURCE_FUNCTION_DIR"
-                  zip -r "$TEMP_ZIP" . -x "*.pyc" "__pycache__/*" "*.git*"
+                  
+                  echo "  📋 Files in source directory before packaging:"
+                  ls -la
+                  
+                  # Create zip excluding config files and other non-deployment files
+                  zip -r "$TEMP_ZIP" . -x "*.pyc" "__pycache__/*" "*.git*" "config.json" "*.md" "*.txt" "requirements-dev.txt"
+                  
+                  echo "  📋 Contents of deployment package:"
+                  unzip -l "$TEMP_ZIP"
+                  
                   cd - >/dev/null
                   
                   echo "  📦 Created deployment package: $TEMP_ZIP"
