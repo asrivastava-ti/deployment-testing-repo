@@ -453,7 +453,7 @@ jobs:
           fi
 
       - name: Handle Drift Detection
-        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.force_deploy != 'true'
+        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.force_deploy != 'true' && github.event.inputs.drift_resolution == 'prompt'
         run: |
           echo "🚨 DRIFT DETECTED - MANUAL APPROVAL REQUIRED"
           echo ""
@@ -466,16 +466,14 @@ jobs:
           echo ""
           echo "⚠️  Current Resolution Setting: ${{ github.event.inputs.drift_resolution || 'prompt' }}"
           echo ""
-          if [ "${{ github.event.inputs.drift_resolution || 'prompt' }}" = "prompt" ]; then
-            echo "🛑 Workflow paused for manual approval"
-            echo "👤 Please review the drift details above and re-run this workflow with your chosen resolution:"
-            echo "   - drift_resolution: accept_console (to accept console changes)"
-            echo "   - drift_resolution: overwrite_console (to overwrite with repo code)"
-            echo "   - drift_resolution: abort (to stop deployment)"
-            echo ""
-            echo "💡 You can also set force_deploy: true to bypass all drift checks"
-            exit 1
-          fi
+          echo "🛑 Workflow paused for manual approval"
+          echo "👤 Please review the drift details above and re-run this workflow with your chosen resolution:"
+          echo "   - drift_resolution: accept_console (to accept console changes)"
+          echo "   - drift_resolution: overwrite_console (to overwrite with repo code)"
+          echo "   - drift_resolution: abort (to stop deployment)"
+          echo ""
+          echo "💡 You can also set force_deploy: true to bypass all drift checks"
+          exit 1
 
       - name: Accept Console Changes
         if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.drift_resolution == 'accept_console'
@@ -580,6 +578,22 @@ jobs:
               echo "✅ Console changes committed to repository"
             fi
           fi
+
+      - name: Overwrite Console Changes
+        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.drift_resolution == 'overwrite_console'
+        run: |
+          echo "🔄 Overwriting console changes with repository code..."
+          echo ""
+          echo "📋 Drift Summary: ${{ steps.initial-drift.outputs.drift_summary }}"
+          echo ""
+          echo "⚠️  This will:"
+          echo "  1. Deploy repository code to AWS Lambda functions"
+          echo "  2. Overwrite any manual changes made in AWS console"
+          echo "  3. Update commit tag to establish new baseline"
+          echo "  4. Console changes will be permanently lost"
+          echo ""
+          echo "✅ Proceeding with deployment - console changes will be overwritten"
+          echo "📋 Repository code will be deployed as the authoritative source"
 
       - name: Abort on Drift
         if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.drift_resolution == 'abort'
