@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full git history for drift detection
 
       - name: Print OIDC token claims
         run: |
@@ -245,12 +247,26 @@ jobs:
                           echo "  Comparing main file: $MAIN_FILE"
                           
                           # Get the file content from the last deployed commit
-                          git show "$LAST_DEPLOYED_COMMIT:$SOURCE_FUNCTION_DIR$MAIN_FILE" > "$TEMP_DIR_LAST/$MAIN_FILE" 2>/dev/null || {
-                            echo "  ⚠️  Could not retrieve file from last deployed commit"
+                          # Remove trailing slash from SOURCE_FUNCTION_DIR for proper git path
+                          SOURCE_PATH="${SOURCE_FUNCTION_DIR%/}/$MAIN_FILE"
+                          echo "  Retrieving file from git: $LAST_DEPLOYED_COMMIT:$SOURCE_PATH"
+                          
+                          # Verify the commit exists first
+                          if ! git cat-file -e "$LAST_DEPLOYED_COMMIT" 2>/dev/null; then
+                            echo "  ⚠️  Commit $LAST_DEPLOYED_COMMIT not found in git history"
                             echo "  ℹ️  Skipping drift check for this function"
                             rm -rf "$TEMP_DIR_AWS" "$TEMP_DIR_LAST"
                             continue
-                          }
+                          fi
+                          
+                          # Get the file content from the last deployed commit
+                          if ! git show "$LAST_DEPLOYED_COMMIT:$SOURCE_PATH" > "$TEMP_DIR_LAST/$MAIN_FILE" 2>/dev/null; then
+                            echo "  ⚠️  Could not retrieve file $SOURCE_PATH from commit $LAST_DEPLOYED_COMMIT"
+                            echo "  ℹ️  File may not have existed in that commit"
+                            echo "  ℹ️  Skipping drift check for this function"
+                            rm -rf "$TEMP_DIR_AWS" "$TEMP_DIR_LAST"
+                            continue
+                          fi
                           
                           # Calculate checksums - compare AWS deployed code with last deployed commit
                           LAST_COMMIT_CHECKSUM=$(sha256sum "$TEMP_DIR_LAST/$MAIN_FILE" | cut -d' ' -f1)
