@@ -737,6 +737,15 @@ jobs:
               git push origin main
               
               echo "✅ Changes pushed to remote repository"
+              
+              # Update the commit SHA for deployment tagging
+              NEW_COMMIT_SHA=$(git rev-parse HEAD)
+              echo "📋 New commit SHA: $NEW_COMMIT_SHA"
+              echo "📋 Original commit SHA: ${{ github.sha }}"
+              
+              # Export the new commit SHA for use in deployment step
+              echo "DEPLOYMENT_COMMIT_SHA=$NEW_COMMIT_SHA" >> $GITHUB_ENV
+              echo "✅ Updated deployment commit SHA for stack tagging"
             fi
           fi
 
@@ -817,12 +826,16 @@ jobs:
             
             # For overwrite_console, we need to force update the Lambda functions
             # First deploy the stack to ensure infrastructure is up to date
+            # Determine which commit SHA to use for tagging
+            COMMIT_FOR_TAGGING="${{ env.DEPLOYMENT_COMMIT_SHA || github.sha }}"
+            echo "📋 Using commit for stack tagging: $COMMIT_FOR_TAGGING"
+            
             sam deploy \
                  --template-file packaged.yaml \
                  --stack-name ${{ env.STACK_NAME }} \
                  --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
                  --no-fail-on-empty-changeset \
-                 --tags GitCommit=${{ github.sha }} \
+                 --tags GitCommit="$COMMIT_FOR_TAGGING" \
                         GitBranch=${{ github.ref_name }} \
                         GitRepository=${{ github.repository }} \
                         DeploymentTime=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
@@ -953,21 +966,37 @@ jobs:
             fi
           else
             # Normal deployment for other cases
+            # Determine which commit SHA to use for tagging
+            COMMIT_FOR_TAGGING="${{ env.DEPLOYMENT_COMMIT_SHA || github.sha }}"
+            echo "📋 Using commit for stack tagging: $COMMIT_FOR_TAGGING"
+            
             sam deploy \
                  --template-file packaged.yaml \
                  --stack-name ${{ env.STACK_NAME }} \
                  --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
                  --no-fail-on-empty-changeset \
-                 --tags GitCommit=${{ github.sha }} \
+                 --tags GitCommit="$COMMIT_FOR_TAGGING" \
                         GitBranch=${{ github.ref_name }} \
                         GitRepository=${{ github.repository }} \
                         DeploymentTime=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
                         WorkflowRun=${{ github.run_id }}
           fi
           
+          # Determine which commit SHA to use for tagging
+          COMMIT_FOR_TAGGING="${{ env.DEPLOYMENT_COMMIT_SHA || github.sha }}"
+          
           echo ""
           echo "✅ Deployment completed successfully"
-          echo "📋 Tagged stack with commit: ${{ github.sha }}"
+          echo "📋 Tagged stack with commit: $COMMIT_FOR_TAGGING"
+          
+          if [ -n "${{ env.DEPLOYMENT_COMMIT_SHA }}" ]; then
+            echo "📋 Using new commit SHA from accepted console changes"
+            echo "📋 Original workflow commit: ${{ github.sha }}"
+            echo "📋 New deployment commit: ${{ env.DEPLOYMENT_COMMIT_SHA }}"
+          else
+            echo "📋 Using original workflow commit: ${{ github.sha }}"
+          fi
+          
           echo "📋 Future deployments will use this commit for drift detection"
           
           if [ "${{ github.event.inputs.drift_resolution }}" == "overwrite_console" ]; then
