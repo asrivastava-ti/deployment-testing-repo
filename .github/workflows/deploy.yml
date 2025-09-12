@@ -216,6 +216,83 @@ jobs:
                             SOURCE_FUNCTION_DIR="$func_dir"
                             break
                           fi
+                        fi
+                      done
+                      
+                      # Check if mapping was successful
+                      if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
+                        echo "  Comparing with source directory: $SOURCE_FUNCTION_DIR"
+                        
+                        # Compare the main Lambda function file
+                        MAIN_FILE=""
+                        if [ -f "$SOURCE_FUNCTION_DIR/lambda_function.py" ]; then
+                          MAIN_FILE="lambda_function.py"
+                        elif [ -f "$SOURCE_FUNCTION_DIR/app.py" ]; then
+                          MAIN_FILE="app.py"
+                        elif [ -f "$SOURCE_FUNCTION_DIR/index.js" ]; then
+                          MAIN_FILE="index.js"
+                        fi
+                        
+                        if [ -n "$MAIN_FILE" ]; then
+                          echo "  Comparing main file: $MAIN_FILE"
+                          
+                          # Calculate checksums of the main files
+                          SOURCE_CHECKSUM=$(sha256sum "$SOURCE_FUNCTION_DIR/$MAIN_FILE" | cut -d' ' -f1)
+                          AWS_CHECKSUM=$(sha256sum "$TEMP_DIR/$MAIN_FILE" 2>/dev/null | cut -d' ' -f1 || echo "missing")
+                          
+                          echo "  Source checksum: $SOURCE_CHECKSUM"
+                          echo "  AWS checksum: $AWS_CHECKSUM"
+                          
+                          if [ "$SOURCE_CHECKSUM" != "$AWS_CHECKSUM" ]; then
+                            echo "  ❌ Lambda function $FUNCTION_NAME has code drift!"
+                            echo "  📋 Main file ($MAIN_FILE) differs between source and AWS"
+                            echo "  🔧 Someone manually modified the function code in AWS console"
+                            
+                            # Show the differences if possible
+                            if [ "$AWS_CHECKSUM" != "missing" ]; then
+                              echo "  📋 Code differences detected:"
+                              diff -u "$SOURCE_FUNCTION_DIR/$MAIN_FILE" "$TEMP_DIR/$MAIN_FILE" || true
+                            else
+                              echo "  📋 Main file missing in AWS deployment"
+                            fi
+                            
+                            LAMBDA_DRIFT_DETECTED=true
+                          else
+                            echo "  ✅ Lambda function $FUNCTION_NAME code matches source"
+                          fi
+                        else
+                          echo "  ⚠️  Could not find main Lambda file in source directory"
+                          echo "  ℹ️  Skipping drift check for this function"
+                        fi
+                      else
+                        echo "  ⚠️  Could not map function to source directory"
+                        echo "  ℹ️  Available directories: $(ls -d src/functions/*/ 2>/dev/null | tr '\n' ' ')"
+                        echo "  ℹ️  Skipping drift check for this function"
+                      fi
+                      
+                      # Clean up temporary directory
+                      rm -rf "$TEMP_DIR"
+                    else
+                      echo "  ⚠️  Could not get download URL for function code"
+                      echo "  ℹ️  Skipping drift check for this function"
+                    fi
+                  done
+                  
+                  if [ "$LAMBDA_DRIFT_DETECTED" = true ]; then
+                    echo ""
+                    echo "❌ Lambda code drift detected!"
+                    echo "🔧 Someone manually modified Lambda function code in the AWS console"
+                    echo "💡 This type of drift cannot be detected by CloudFormation drift detection"
+                    echo "🚫 Deployment blocked - please revert manual changes or update your source code"
+                    exit 1
+                  else
+                    echo "✅ No Lambda code drift detected"
+                  fi
+                else
+                  echo "ℹ️  No Lambda functions found in stack"
+                fi
+              fi
+            fi
             
             echo "✅ All drift checks passed, proceeding with deployment"
             echo "stack_exists=true" >> $GITHUB_OUTPUT
@@ -267,7 +344,7 @@ jobs:
       - name: Post-Creation Drift Check (New Stacks Only)
         if: steps.initial-drift.outputs.stack_exists == 'false'
         run: |
-          echo "� Running drift check after stack creation (before deployment)..."
+          echo "🔍 Running drift check after stack creation (before deployment)..."
           
           # Wait a moment for stack to stabilize
           sleep 10
@@ -326,7 +403,7 @@ jobs:
       - name: Deploy Code (Final Step)
         run: |
           if [ "${{ steps.initial-drift.outputs.stack_exists }}" == "true" ]; then
-            echo "� Updating existing stack with new code..."
+            echo "🔄 Updating existing stack with new code..."
           else
             echo "📦 Deploying code to newly created stack..."
           fi
@@ -335,6 +412,13 @@ jobs:
                --template-file packaged.yaml \
                --stack-name ${{ env.STACK_NAME }} \
                --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-               --no-fail-on-empty-changeset
+               --no-fail-on-empty-changeset \
+               --tags GitCommit=${{ github.sha }} \
+                      GitBranch=${{ github.ref_name }} \
+                      GitRepository=${{ github.repository }} \
+                      DeploymentTime=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+                      WorkflowRun=${{ github.run_id }}
           
           echo "✅ Deployment completed successfully"
+          echo "📋 Tagged stack with commit: ${{ github.sha }}"
+          echo "📋 Future deployments will use this commit for drift detection"
