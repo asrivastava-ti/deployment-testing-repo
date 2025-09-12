@@ -7,10 +7,28 @@ on:
       - "src/functions/**"
       - "scripts/generate_template.py"
       - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      drift_resolution:
+        description: 'How to handle drift if detected'
+        required: false
+        default: 'prompt'
+        type: choice
+        options:
+        - 'prompt'
+        - 'accept_console'
+        - 'overwrite_console'
+        - 'abort'
+      force_deploy:
+        description: 'Force deployment bypassing all drift checks'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write   # for OIDC
-  contents: read
+  contents: write   # for git operations when accepting console changes
+  pull-requests: write   # for creating PRs if needed
 
 env:
   AWS_REGION: us-east-1
@@ -315,10 +333,12 @@ jobs:
                     echo "❌ Lambda code drift detected!"
                     echo "🔧 Someone manually modified Lambda function code in the AWS console"
                     echo "💡 This type of drift cannot be detected by CloudFormation drift detection"
-                    echo "🚫 Deployment blocked - please revert manual changes or update your source code"
-                    exit 1
+                    echo ""
+                    echo "drift_detected=true" >> $GITHUB_OUTPUT
+                    echo "drift_summary=Lambda code drift detected - manual console changes found" >> $GITHUB_OUTPUT
                   else
                     echo "✅ No Lambda code drift detected"
+                    echo "drift_detected=false" >> $GITHUB_OUTPUT
                   fi
                 else
                   echo "ℹ️  No Lambda functions found in stack"
@@ -432,9 +452,165 @@ jobs:
             echo "✅ Proceeding with code deployment..."
           fi
 
-      - name: Deploy Code (Final Step)
+      - name: Handle Drift Detection
+        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.force_deploy != 'true'
         run: |
-          if [ "${{ steps.initial-drift.outputs.stack_exists }}" == "true" ]; then
+          echo "🚨 DRIFT DETECTED - MANUAL APPROVAL REQUIRED"
+          echo ""
+          echo "📋 Drift Summary: ${{ steps.initial-drift.outputs.drift_summary }}"
+          echo ""
+          echo "🔧 Resolution Options:"
+          echo "  1. Accept Console Changes - Pull console changes into repository"
+          echo "  2. Overwrite Console Changes - Deploy repository code (discards console changes)"
+          echo "  3. Abort - Stop deployment for manual investigation"
+          echo ""
+          echo "⚠️  Current Resolution Setting: ${{ github.event.inputs.drift_resolution || 'prompt' }}"
+          echo ""
+          if [ "${{ github.event.inputs.drift_resolution || 'prompt' }}" = "prompt" ]; then
+            echo "🛑 Workflow paused for manual approval"
+            echo "👤 Please review the drift details above and re-run this workflow with your chosen resolution:"
+            echo "   - drift_resolution: accept_console (to accept console changes)"
+            echo "   - drift_resolution: overwrite_console (to overwrite with repo code)"
+            echo "   - drift_resolution: abort (to stop deployment)"
+            echo ""
+            echo "💡 You can also set force_deploy: true to bypass all drift checks"
+            exit 1
+          fi
+
+      - name: Accept Console Changes
+        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.drift_resolution == 'accept_console'
+        run: |
+          echo "✅ Accepting console changes and syncing with repository..."
+          echo ""
+          echo "🔄 This will:"
+          echo "  1. Download current AWS Lambda code"
+          echo "  2. Update repository files with console changes"
+          echo "  3. Create a commit with the console changes"
+          echo "  4. Continue with deployment using the updated code"
+          echo ""
+          
+          # Get all Lambda functions from the stack
+          LAMBDA_FUNCTIONS=$(aws cloudformation describe-stack-resources \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' \
+            --output text)
+          
+          if [ -n "$LAMBDA_FUNCTIONS" ]; then
+            for FUNCTION_NAME in $LAMBDA_FUNCTIONS; do
+              echo "📥 Processing function: $FUNCTION_NAME"
+              
+              # Find the function's logical ID and map to source directory
+              LOGICAL_ID=$(aws cloudformation describe-stack-resources \
+                --stack-name ${{ env.STACK_NAME }} \
+                --query "StackResources[?PhysicalResourceId=='$FUNCTION_NAME'].LogicalResourceId" --output text)
+              
+              # Download current function code
+              TEMP_DIR="/tmp/${FUNCTION_NAME}-console-code"
+              mkdir -p "$TEMP_DIR"
+              
+              DOWNLOAD_URL=$(aws lambda get-function \
+                --function-name $FUNCTION_NAME \
+                --query 'Code.Location' --output text)
+              
+              if [ "$DOWNLOAD_URL" != "None" ] && [ -n "$DOWNLOAD_URL" ]; then
+                curl -s "$DOWNLOAD_URL" -o "$TEMP_DIR/console-code.zip"
+                cd "$TEMP_DIR"
+                unzip -q console-code.zip
+                rm console-code.zip
+                cd - >/dev/null
+                
+                # Map to source directory (reuse mapping logic)
+                SOURCE_FUNCTION_DIR=""
+                LOGICAL_ID_LOWER=$(echo "$LOGICAL_ID" | tr '[:upper:]' '[:lower:]')
+                
+                for func_dir in src/functions/*/; do
+                  if [ -d "$func_dir" ]; then
+                    func_name=$(basename "$func_dir")
+                    func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
+                    
+                    if [ "$LOGICAL_ID_LOWER" = "$func_name_lower" ] || \
+                       [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]] || \
+                       [[ "$func_name_lower" == *"$LOGICAL_ID_LOWER"* ]]; then
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                  fi
+                done
+                
+                if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
+                  echo "  📁 Updating source directory: $SOURCE_FUNCTION_DIR"
+                  
+                  # Find main file and update it
+                  MAIN_FILE=""
+                  if [ -f "$SOURCE_FUNCTION_DIR/lambda_function.py" ]; then
+                    MAIN_FILE="lambda_function.py"
+                  elif [ -f "$SOURCE_FUNCTION_DIR/app.py" ]; then
+                    MAIN_FILE="app.py"
+                  elif [ -f "$SOURCE_FUNCTION_DIR/index.js" ]; then
+                    MAIN_FILE="index.js"
+                  fi
+                  
+                  if [ -n "$MAIN_FILE" ] && [ -f "$TEMP_DIR/$MAIN_FILE" ]; then
+                    echo "  📝 Updating $MAIN_FILE with console changes"
+                    cp "$TEMP_DIR/$MAIN_FILE" "$SOURCE_FUNCTION_DIR/$MAIN_FILE"
+                  fi
+                fi
+                
+                rm -rf "$TEMP_DIR"
+              fi
+            done
+            
+            # Configure git for the commit
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            
+            # Add and commit the changes
+            git add src/functions/
+            if git diff --staged --quiet; then
+              echo "ℹ️  No changes to commit"
+            else
+              git commit -m "Accept console changes from AWS Lambda functions
+
+              This commit incorporates manual changes that were made directly in the AWS console.
+              
+              Workflow: ${{ github.workflow }}
+              Run ID: ${{ github.run_id }}
+              Original commit: ${{ github.sha }}"
+              
+              echo "✅ Console changes committed to repository"
+            fi
+          fi
+
+      - name: Abort on Drift
+        if: steps.initial-drift.outputs.drift_detected == 'true' && github.event.inputs.drift_resolution == 'abort'
+        run: |
+          echo "🛑 Deployment aborted due to drift detection"
+          echo ""
+          echo "📋 Drift Summary: ${{ steps.initial-drift.outputs.drift_summary }}"
+          echo ""
+          echo "🔧 Manual Action Required:"
+          echo "  1. Review the drift details in the logs above"
+          echo "  2. Decide whether to accept console changes or revert them"
+          echo "  3. Re-run the workflow with appropriate drift_resolution setting"
+          echo ""
+          echo "💡 Resolution options:"
+          echo "  - accept_console: Accept and commit console changes"
+          echo "  - overwrite_console: Deploy repository code (discards console changes)"
+          echo "  - force_deploy: Bypass all drift checks"
+          exit 1
+
+      - name: Deploy Code (Final Step)
+        if: github.event.inputs.force_deploy == 'true' || steps.initial-drift.outputs.drift_detected != 'true' || github.event.inputs.drift_resolution == 'accept_console' || github.event.inputs.drift_resolution == 'overwrite_console'
+        run: |
+          if [ "${{ github.event.inputs.force_deploy }}" == "true" ]; then
+            echo "🚀 Force deployment - bypassing all drift checks"
+          elif [ "${{ steps.initial-drift.outputs.drift_detected }}" == "true" ]; then
+            if [ "${{ github.event.inputs.drift_resolution }}" == "accept_console" ]; then
+              echo "✅ Deploying with accepted console changes"
+            elif [ "${{ github.event.inputs.drift_resolution }}" == "overwrite_console" ]; then
+              echo "🔄 Deploying repository code - overwriting console changes"
+            fi
+          elif [ "${{ steps.initial-drift.outputs.stack_exists }}" == "true" ]; then
             echo "🔄 Updating existing stack with new code..."
           else
             echo "📦 Deploying code to newly created stack..."
