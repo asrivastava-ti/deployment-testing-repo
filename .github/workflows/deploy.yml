@@ -659,16 +659,97 @@ jobs:
           echo "📋 Stack: ${{ env.STACK_NAME }}"
           echo ""
           
-          sam deploy \
-               --template-file packaged.yaml \
-               --stack-name ${{ env.STACK_NAME }} \
-               --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-               --no-fail-on-empty-changeset \
-               --tags GitCommit=${{ github.sha }} \
-                      GitBranch=${{ github.ref_name }} \
-                      GitRepository=${{ github.repository }} \
-                      DeploymentTime=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-                      WorkflowRun=${{ github.run_id }}
+          if [ "${{ github.event.inputs.drift_resolution }}" == "overwrite_console" ]; then
+            echo "🔄 Force updating Lambda functions to overwrite console changes..."
+            
+            # For overwrite_console, we need to force update the Lambda functions
+            # First deploy the stack to ensure infrastructure is up to date
+            sam deploy \
+                 --template-file packaged.yaml \
+                 --stack-name ${{ env.STACK_NAME }} \
+                 --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+                 --no-fail-on-empty-changeset \
+                 --tags GitCommit=${{ github.sha }} \
+                        GitBranch=${{ github.ref_name }} \
+                        GitRepository=${{ github.repository }} \
+                        DeploymentTime=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+                        WorkflowRun=${{ github.run_id }}
+            
+            echo ""
+            echo "🔄 Force updating Lambda function code to overwrite console changes..."
+            
+            # Get all Lambda functions from the stack and force update their code
+            LAMBDA_FUNCTIONS=$(aws cloudformation describe-stack-resources \
+              --stack-name ${{ env.STACK_NAME }} \
+              --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' \
+              --output text)
+            
+            if [ -n "$LAMBDA_FUNCTIONS" ]; then
+              for FUNCTION_NAME in $LAMBDA_FUNCTIONS; do
+                echo "🔄 Force updating function: $FUNCTION_NAME"
+                
+                # Find the function's logical ID and map to source directory
+                LOGICAL_ID=$(aws cloudformation describe-stack-resources \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --query "StackResources[?PhysicalResourceId=='$FUNCTION_NAME'].LogicalResourceId" --output text)
+                
+                # Map to source directory using the same logic as drift detection
+                SOURCE_FUNCTION_DIR=""
+                LOGICAL_ID_LOWER=$(echo "$LOGICAL_ID" | tr '[:upper:]' '[:lower:]')
+                
+                for func_dir in src/functions/*/; do
+                  if [ -d "$func_dir" ]; then
+                    func_name=$(basename "$func_dir")
+                    func_name_lower=$(echo "$func_name" | tr '[:upper:]' '[:lower:]')
+                    
+                    if [ "$LOGICAL_ID_LOWER" = "$func_name_lower" ] || \
+                       [[ "$LOGICAL_ID_LOWER" == *"$func_name_lower"* ]] || \
+                       [[ "$func_name_lower" == *"$LOGICAL_ID_LOWER"* ]]; then
+                      SOURCE_FUNCTION_DIR="$func_dir"
+                      break
+                    fi
+                  fi
+                done
+                
+                if [ -n "$SOURCE_FUNCTION_DIR" ] && [ -d "$SOURCE_FUNCTION_DIR" ]; then
+                  echo "  📁 Source directory: $SOURCE_FUNCTION_DIR"
+                  
+                  # Create a temporary zip with the repository code
+                  TEMP_ZIP="/tmp/${FUNCTION_NAME}-repo-code.zip"
+                  cd "$SOURCE_FUNCTION_DIR"
+                  zip -r "$TEMP_ZIP" . -x "*.pyc" "__pycache__/*" "*.git*"
+                  cd - >/dev/null
+                  
+                  echo "  📦 Created deployment package: $TEMP_ZIP"
+                  
+                  # Force update the Lambda function code
+                  echo "  🚀 Updating Lambda function code..."
+                  aws lambda update-function-code \
+                    --function-name "$FUNCTION_NAME" \
+                    --zip-file "fileb://$TEMP_ZIP"
+                  
+                  echo "  ✅ Function $FUNCTION_NAME code updated successfully"
+                  
+                  # Clean up
+                  rm -f "$TEMP_ZIP"
+                else
+                  echo "  ⚠️  Could not map function to source directory, skipping force update"
+                fi
+              done
+            fi
+          else
+            # Normal deployment for other cases
+            sam deploy \
+                 --template-file packaged.yaml \
+                 --stack-name ${{ env.STACK_NAME }} \
+                 --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+                 --no-fail-on-empty-changeset \
+                 --tags GitCommit=${{ github.sha }} \
+                        GitBranch=${{ github.ref_name }} \
+                        GitRepository=${{ github.repository }} \
+                        DeploymentTime=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+                        WorkflowRun=${{ github.run_id }}
+          fi
           
           echo ""
           echo "✅ Deployment completed successfully"
