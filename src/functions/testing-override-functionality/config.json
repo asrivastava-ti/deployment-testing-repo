@@ -6,5 +6,5 @@
   "layers": [],
   "env": {},
   "policies": [], 
-  "role": "testing-override-functionality-role-r1wjnc4o"
+  "role": "arn:aws:iam::975049970782:role/service-role/testing-override-functionality-role-r1wjnc4o"
 }
