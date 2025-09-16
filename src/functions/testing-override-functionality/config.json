@@ -1,0 +1,10 @@
+{
+  "handler": "app.lambda_handler",
+  "runtime": "python3.13",
+  "memory": 512,
+  "timeout": 20,
+  "layers": [],
+  "env": {},
+  "policies": [], 
+  "role": "testing-override-functionality-role-r1wjnc4o"
+}
