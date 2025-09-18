@@ -4,7 +4,10 @@
   "memory": 512,
   "timeout": 20,
   "layers": [],
-  "env": null,
   "policies": [], 
+   "env": {
+    "STAGE": "dev",
+    "DB_TABLE": "users"
+  },
   "role": "arn:aws:iam::975049970782:role/service-role/telusdigital-role-akg4m826"
 }
